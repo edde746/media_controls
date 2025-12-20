@@ -1,8 +1,13 @@
 package com.edde746.os_media_controls
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.AudioManager
+import android.os.Build
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -25,6 +30,10 @@ class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
     private var currentState: Int = PlaybackStateCompat.STATE_NONE
     private var currentPosition: Long = 0
     private var currentSpeed: Float = 1.0f
+
+    // Audio becoming noisy (headphone/Bluetooth disconnect) handling
+    private var noisyAudioReceiver: BroadcastReceiver? = null
+    private var isNoisyReceiverRegistered = false
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         context = binding.applicationContext
@@ -103,6 +112,49 @@ class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
 
             isActive = true
         }
+    }
+
+    private fun createNoisyAudioReceiver(): BroadcastReceiver {
+        return object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
+                    // Only send pause if currently playing
+                    if (currentState == PlaybackStateCompat.STATE_PLAYING) {
+                        sendEvent(mapOf("type" to "pause"))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun registerNoisyAudioReceiver() {
+        if (isNoisyReceiverRegistered) return
+
+        noisyAudioReceiver = createNoisyAudioReceiver()
+        val intentFilter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(
+                noisyAudioReceiver,
+                intentFilter,
+                Context.RECEIVER_NOT_EXPORTED
+            )
+        } else {
+            context.registerReceiver(noisyAudioReceiver, intentFilter)
+        }
+        isNoisyReceiverRegistered = true
+    }
+
+    private fun unregisterNoisyAudioReceiver() {
+        if (!isNoisyReceiverRegistered || noisyAudioReceiver == null) return
+
+        try {
+            context.unregisterReceiver(noisyAudioReceiver)
+        } catch (e: IllegalArgumentException) {
+            // Receiver not registered, ignore
+        }
+        isNoisyReceiverRegistered = false
+        noisyAudioReceiver = null
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
@@ -196,12 +248,22 @@ class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
         val positionSeconds = (arguments["position"] as? Number)?.toDouble() ?: 0.0
         val speed = (arguments["speed"] as? Number)?.toFloat() ?: 1.0f
 
+        val previousState = currentState
+
         currentState = when (stateString) {
             "playing" -> PlaybackStateCompat.STATE_PLAYING
             "paused" -> PlaybackStateCompat.STATE_PAUSED
             "stopped" -> PlaybackStateCompat.STATE_STOPPED
             "buffering" -> PlaybackStateCompat.STATE_BUFFERING
             else -> PlaybackStateCompat.STATE_NONE
+        }
+
+        // Manage noisy audio receiver based on playback state
+        if (currentState == PlaybackStateCompat.STATE_PLAYING) {
+            registerNoisyAudioReceiver()
+        } else if (previousState == PlaybackStateCompat.STATE_PLAYING) {
+            // Unregister when transitioning away from playing
+            unregisterNoisyAudioReceiver()
         }
 
         currentPosition = (positionSeconds * 1000).toLong() // Convert to milliseconds
@@ -227,6 +289,8 @@ class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
     }
 
     private fun clear() {
+        unregisterNoisyAudioReceiver()
+        currentState = PlaybackStateCompat.STATE_NONE
         mediaSession.setMetadata(null)
         val playbackState = PlaybackStateCompat.Builder()
             .setState(PlaybackStateCompat.STATE_NONE, 0, 0.0f)
@@ -250,6 +314,7 @@ class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        unregisterNoisyAudioReceiver()
         methodChannel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
         mediaSession.release()
