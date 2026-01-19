@@ -9,13 +9,30 @@
 #include <memory>
 #include <sstream>
 
+// Windows headers
+#include <objbase.h>
+#include <DispatcherQueue.h>
+#include <commctrl.h>
+
+// Declare SetCurrentProcessExplicitAppUserModelID manually to avoid header conflicts
+extern "C" HRESULT WINAPI SetCurrentProcessExplicitAppUserModelID(_In_ PCWSTR AppID);
+
+// Subclass ID for our window hook
+#define SMTC_SUBCLASS_ID 1
+
 // Additional WinRT headers for SMTC
-#include <SystemMediaTransportControlsInterop.h>
+#include <winrt/Windows.Media.Playback.h>
+#include <winrt/Windows.System.h>
 
 using namespace winrt;
 using namespace winrt::Windows::Media;
 using namespace winrt::Windows::Storage::Streams;
 using namespace winrt::Windows::Foundation;
+
+// Custom message ID for posting work to SMTC thread
+#define WM_SMTC_WORK (WM_USER + 1)
+// Custom message ID for posting events to main thread
+#define WM_SMTC_EVENT (WM_USER + 2)
 
 namespace os_media_controls {
 
@@ -62,44 +79,156 @@ OsMediaControlsPlugin::OsMediaControlsPlugin(
     flutter::PluginRegistrarWindows *registrar)
     : registrar_(registrar) {
 
-  // Initialize WinRT apartment
-  try {
-    winrt::init_apartment();
-  } catch (...) {
-    // Apartment may already be initialized
-  }
+  // Set AppUserModelId for the process - helps Windows identify the app in SMTC
+  SetCurrentProcessExplicitAppUserModelID(L"com.edde746.os_media_controls.example");
 
-  // Get HWND from Flutter window view
+  // Get main window handle and subclass it for event dispatching
   auto view = registrar_->GetView();
   if (view) {
-    hwnd_ = view->GetNativeWindow();
-    InitializeSMTC(hwnd_);
+    main_window_ = view->GetNativeWindow();
+    if (main_window_) {
+      SetWindowSubclass(main_window_, WndProcHook, SMTC_SUBCLASS_ID,
+                        reinterpret_cast<DWORD_PTR>(this));
+    }
+  }
+
+  // Start dedicated STA thread for SMTC operations
+  smtc_thread_running_ = true;
+  smtc_thread_ = std::thread(&OsMediaControlsPlugin::SmtcThreadProc, this);
+
+  // Wait for thread to initialize and get its ID
+  while (smtc_thread_id_ == 0 && smtc_thread_running_) {
+    Sleep(1);
   }
 }
 
 OsMediaControlsPlugin::~OsMediaControlsPlugin() {
-  CleanupSMTC();
-  try {
-    winrt::uninit_apartment();
-  } catch (...) {
-    // Ignore cleanup errors
+  // Remove window subclass
+  if (main_window_) {
+    RemoveWindowSubclass(main_window_, WndProcHook, SMTC_SUBCLASS_ID);
+  }
+
+  // Signal thread to stop
+  if (smtc_thread_running_ && smtc_thread_id_ != 0) {
+    smtc_thread_running_ = false;
+    PostThreadMessage(smtc_thread_id_, WM_QUIT, 0, 0);
+  }
+
+  // Wait for thread to finish
+  if (smtc_thread_.joinable()) {
+    smtc_thread_.join();
   }
 }
 
-void OsMediaControlsPlugin::InitializeSMTC(HWND hwnd) {
-  if (!hwnd)
+LRESULT CALLBACK OsMediaControlsPlugin::WndProcHook(
+    HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
+    UINT_PTR subclassId, DWORD_PTR refData) {
+  if (msg == WM_SMTC_EVENT) {
+    auto* plugin = reinterpret_cast<OsMediaControlsPlugin*>(refData);
+    if (plugin) {
+      plugin->ProcessPendingEvents();
+    }
+    return 0;
+  }
+  return DefSubclassProc(hwnd, msg, wParam, lParam);
+}
+
+void OsMediaControlsPlugin::ProcessPendingEvents() {
+  std::lock_guard<std::mutex> lock(events_mutex_);
+  while (!pending_events_.empty()) {
+    auto event = pending_events_.front();
+    pending_events_.pop();
+    SendEvent(event);
+  }
+}
+
+void OsMediaControlsPlugin::QueueEventForMainThread(const flutter::EncodableMap& event) {
+  {
+    std::lock_guard<std::mutex> lock(events_mutex_);
+    pending_events_.push(event);
+  }
+  // Post message to main window to trigger event processing
+  if (main_window_) {
+    PostMessage(main_window_, WM_SMTC_EVENT, 0, 0);
+  }
+}
+
+void OsMediaControlsPlugin::SmtcThreadProc() {
+  // Initialize COM as STA on this thread
+  HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  if (FAILED(hr) && hr != S_FALSE) {
+    OutputDebugStringW(L"Failed to initialize COM as STA on SMTC thread\n");
+    smtc_thread_running_ = false;
     return;
+  }
 
+  // Create DispatcherQueue for this thread (required for MediaPlayer)
+  DispatcherQueueOptions options{
+      sizeof(DispatcherQueueOptions),
+      DQTYPE_THREAD_CURRENT,
+      DQTAT_COM_NONE
+  };
+
+  ABI::Windows::System::IDispatcherQueueController* controller = nullptr;
+  hr = CreateDispatcherQueueController(options, &controller);
+  if (SUCCEEDED(hr) && controller) {
+    winrt::attach_abi(dispatcher_queue_controller_, controller);
+  }
+
+  // Store thread ID for posting messages
+  smtc_thread_id_ = GetCurrentThreadId();
+
+  // Create message queue
+  MSG msg;
+  PeekMessage(&msg, nullptr, 0, 0, PM_NOREMOVE);
+
+  // Initialize SMTC with MediaPlayer
+  InitializeSMTCOnThread();
+
+  // Message loop
+  while (smtc_thread_running_) {
+    BOOL ret = GetMessage(&msg, nullptr, 0, 0);
+    if (ret == 0 || ret == -1) {
+      break;
+    }
+
+    if (msg.message == WM_SMTC_WORK) {
+      auto* func = reinterpret_cast<std::function<void()>*>(msg.lParam);
+      if (func) {
+        (*func)();
+        delete func;
+      }
+    } else {
+      TranslateMessage(&msg);
+      DispatchMessage(&msg);
+    }
+  }
+
+  // Cleanup
+  CleanupSMTC();
+  CoUninitialize();
+}
+
+void OsMediaControlsPlugin::PostToSmtcThread(std::function<void()> func) {
+  if (smtc_thread_id_ != 0 && smtc_thread_running_) {
+    auto* funcPtr = new std::function<void()>(std::move(func));
+    if (!PostThreadMessage(smtc_thread_id_, WM_SMTC_WORK, 0,
+                           reinterpret_cast<LPARAM>(funcPtr))) {
+      delete funcPtr;
+    }
+  }
+}
+
+void OsMediaControlsPlugin::InitializeSMTCOnThread() {
   try {
-    // Get ISystemMediaTransportControlsInterop interface for desktop apps
-    auto interop =
-        winrt::get_activation_factory<SystemMediaTransportControls,
-                                      ISystemMediaTransportControlsInterop>();
+    // Create MediaPlayer instance - this is the correct way to get SMTC for desktop apps
+    media_player_ = winrt::Windows::Media::Playback::MediaPlayer();
 
-    // Get SMTC instance for this window
-    winrt::guid guid = winrt::guid_of<SystemMediaTransportControls>();
-    winrt::check_hresult(
-        interop->GetForWindow(hwnd, guid, winrt::put_abi(smtc_)));
+    // Get SMTC from MediaPlayer
+    smtc_ = media_player_.SystemMediaTransportControls();
+
+    // Disable automatic command manager integration (we control SMTC manually)
+    media_player_.CommandManager().IsEnabled(false);
 
     // Enable basic controls by default
     smtc_.IsPlayEnabled(true);
@@ -107,6 +236,15 @@ void OsMediaControlsPlugin::InitializeSMTC(HWND hwnd) {
     smtc_.IsNextEnabled(false);
     smtc_.IsPreviousEnabled(false);
     smtc_.IsStopEnabled(false);
+
+    // Initialize display updater with media type
+    auto updater = smtc_.DisplayUpdater();
+    updater.Type(MediaPlaybackType::Music);
+    updater.AppMediaId(L"com.edde746.os_media_controls");
+    updater.Update();
+
+    // Enable SMTC
+    smtc_.IsEnabled(true);
 
     // Register button pressed event handler
     button_pressed_token_ = smtc_.ButtonPressed(
@@ -119,7 +257,6 @@ void OsMediaControlsPlugin::InitializeSMTC(HWND hwnd) {
     position_change_token_ = smtc_.PlaybackPositionChangeRequested(
         [this](SystemMediaTransportControls const &,
                PlaybackPositionChangeRequestedEventArgs const &args) {
-          // Convert TimeSpan (100-nanosecond units) to seconds
           double positionSeconds =
               args.RequestedPlaybackPosition().count() / 10000000.0;
 
@@ -129,30 +266,40 @@ void OsMediaControlsPlugin::InitializeSMTC(HWND hwnd) {
           event[flutter::EncodableValue("position")] =
               flutter::EncodableValue(positionSeconds);
 
-          SendEvent(event);
+          QueueEventForMainThread(event);
         });
 
-  } catch (winrt::hresult_error const &) {
-    // Log error but don't crash - SMTC may not be available on all Windows
-    // versions
+    OutputDebugStringW(L"SMTC initialized successfully with MediaPlayer\n");
+
+  } catch (winrt::hresult_error const &ex) {
+    OutputDebugStringW(L"SMTC initialization failed: ");
+    OutputDebugStringW(ex.message().c_str());
+    OutputDebugStringW(L"\n");
   }
+}
+
+void OsMediaControlsPlugin::InitializeSMTCWithWindow(HWND hwnd) {
+  // Not used - MediaPlayer approach is preferred
 }
 
 void OsMediaControlsPlugin::CleanupSMTC() {
   if (smtc_) {
     try {
-      // Unregister event handlers
       smtc_.ButtonPressed(button_pressed_token_);
       smtc_.PlaybackPositionChangeRequested(position_change_token_);
-
-      // Clear display
       smtc_.DisplayUpdater().ClearAll();
       smtc_.DisplayUpdater().Update();
-
+      smtc_.IsEnabled(false);
       smtc_ = nullptr;
     } catch (...) {
-      // Ignore cleanup errors
     }
+  }
+  if (media_player_) {
+    media_player_.Close();
+    media_player_ = nullptr;
+  }
+  if (dispatcher_queue_controller_) {
+    dispatcher_queue_controller_ = nullptr;
   }
 }
 
@@ -173,7 +320,10 @@ void OsMediaControlsPlugin::HandleMethodCall(
         const auto &list = std::get<flutter::EncodableList>(*args);
         for (const auto &item : list) {
           if (std::holds_alternative<std::string>(item)) {
-            EnableControl(std::get<std::string>(item));
+            std::string control = std::get<std::string>(item);
+            PostToSmtcThread([this, control]() {
+              EnableControlOnThread(control);
+            });
           }
         }
       }
@@ -185,7 +335,10 @@ void OsMediaControlsPlugin::HandleMethodCall(
         const auto &list = std::get<flutter::EncodableList>(*args);
         for (const auto &item : list) {
           if (std::holds_alternative<std::string>(item)) {
-            DisableControl(std::get<std::string>(item));
+            std::string control = std::get<std::string>(item);
+            PostToSmtcThread([this, control]() {
+              DisableControlOnThread(control);
+            });
           }
         }
       }
@@ -198,15 +351,9 @@ void OsMediaControlsPlugin::HandleMethodCall(
     // Windows doesn't display queue info
     result->Success(flutter::EncodableValue(nullptr));
   } else if (method_name == "clear") {
-    if (smtc_) {
-      try {
-        smtc_.DisplayUpdater().ClearAll();
-        smtc_.DisplayUpdater().Update();
-        smtc_.PlaybackStatus(MediaPlaybackStatus::Closed);
-      } catch (...) {
-        // Ignore errors
-      }
-    }
+    PostToSmtcThread([this]() {
+      ClearOnThread();
+    });
     result->Success(flutter::EncodableValue(nullptr));
   } else {
     result->NotImplemented();
@@ -214,97 +361,108 @@ void OsMediaControlsPlugin::HandleMethodCall(
 }
 
 void OsMediaControlsPlugin::SetMetadata(const flutter::EncodableValue *args) {
-  if (!args || !std::holds_alternative<flutter::EncodableMap>(*args) ||
-      !smtc_) {
+  if (!args || !std::holds_alternative<flutter::EncodableMap>(*args)) {
     return;
   }
 
   const auto &map = std::get<flutter::EncodableMap>(*args);
+
+  std::string title = GetStringFromMap(map, "title");
+  std::string artist = GetStringFromMap(map, "artist");
+  std::string album = GetStringFromMap(map, "album");
+  std::string albumArtist = GetStringFromMap(map, "albumArtist");
+  std::string artworkUri = GetStringFromMap(map, "artworkUrl");
+
+  PostToSmtcThread([this, title, artist, album, albumArtist, artworkUri]() {
+    SetMetadataOnThread(title, artist, album, albumArtist, artworkUri);
+  });
+}
+
+void OsMediaControlsPlugin::SetMetadataOnThread(
+    const std::string& title, const std::string& artist,
+    const std::string& album, const std::string& albumArtist,
+    const std::string& artworkUri) {
+
+  if (!smtc_) return;
 
   try {
     auto updater = smtc_.DisplayUpdater();
     updater.Type(MediaPlaybackType::Music);
 
-    // Set music properties
     auto musicProps = updater.MusicProperties();
 
-    auto title = GetStringFromMap(map, "title");
     if (!title.empty()) {
       musicProps.Title(StringToHString(title));
     }
-
-    auto artist = GetStringFromMap(map, "artist");
     if (!artist.empty()) {
       musicProps.Artist(StringToHString(artist));
     }
-
-    auto album = GetStringFromMap(map, "album");
     if (!album.empty()) {
       musicProps.AlbumTitle(StringToHString(album));
     }
-
-    auto albumArtist = GetStringFromMap(map, "albumArtist");
     if (!albumArtist.empty()) {
       musicProps.AlbumArtist(StringToHString(albumArtist));
     }
 
-    // Handle artwork if provided
-    auto artwork_it = map.find(flutter::EncodableValue("artwork"));
-    if (artwork_it != map.end() &&
-        std::holds_alternative<std::vector<uint8_t>>(artwork_it->second)) {
-      auto artwork_bytes = std::get<std::vector<uint8_t>>(artwork_it->second);
-      if (!artwork_bytes.empty()) {
-        auto streamRef = CreateStreamReferenceFromBytes(artwork_bytes);
-        if (streamRef) {
-          updater.Thumbnail(streamRef);
-        }
+    if (!artworkUri.empty()) {
+      auto streamRef = CreateStreamReferenceFromUri(artworkUri);
+      if (streamRef) {
+        updater.Thumbnail(streamRef);
       }
     }
 
-    // Apply updates
     updater.Update();
 
   } catch (winrt::hresult_error const &) {
-    // Ignore metadata update errors
   }
 }
 
 void OsMediaControlsPlugin::SetPlaybackState(
     const flutter::EncodableValue *args) {
-  if (!args || !std::holds_alternative<flutter::EncodableMap>(*args) ||
-      !smtc_) {
+  if (!args || !std::holds_alternative<flutter::EncodableMap>(*args)) {
     return;
   }
 
   const auto &map = std::get<flutter::EncodableMap>(*args);
 
-  try {
-    auto state_str = GetStringFromMap(map, "state");
-    auto position = GetDoubleFromMap(map, "position");
-    auto speed = GetDoubleFromMap(map, "speed");
+  std::string state = GetStringFromMap(map, "state");
+  double position = GetDoubleFromMap(map, "position");
+  double duration = GetDoubleFromMap(map, "duration");
+  double speed = GetDoubleFromMap(map, "speed");
 
-    // Set playback status
-    if (state_str == "playing") {
+  PostToSmtcThread([this, state, position, duration, speed]() {
+    SetPlaybackStateOnThread(state, position, duration, speed);
+  });
+}
+
+void OsMediaControlsPlugin::SetPlaybackStateOnThread(
+    const std::string& state, double position, double duration, double speed) {
+
+  if (!smtc_) return;
+
+  try {
+    // Set playback status and ensure SMTC is enabled for active states
+    if (state == "playing") {
+      smtc_.IsEnabled(true);
       smtc_.PlaybackStatus(MediaPlaybackStatus::Playing);
-    } else if (state_str == "paused") {
+    } else if (state == "paused") {
+      smtc_.IsEnabled(true);
       smtc_.PlaybackStatus(MediaPlaybackStatus::Paused);
-    } else if (state_str == "stopped") {
+    } else if (state == "stopped") {
+      smtc_.IsEnabled(true);
       smtc_.PlaybackStatus(MediaPlaybackStatus::Stopped);
-    } else if (state_str == "none") {
+    } else if (state == "none") {
       smtc_.PlaybackStatus(MediaPlaybackStatus::Closed);
+      smtc_.IsEnabled(false);
     }
 
     // Update timeline properties for seek bar
     SystemMediaTransportControlsTimelineProperties timeline;
 
-    // Position in TimeSpan (100-nanosecond units)
     int64_t positionTicks = static_cast<int64_t>(position * 10000000.0);
     timeline.Position(winrt::Windows::Foundation::TimeSpan(positionTicks));
-
     timeline.MinSeekTime(winrt::Windows::Foundation::TimeSpan(0));
 
-    // Get duration from map if available
-    auto duration = GetDoubleFromMap(map, "duration");
     if (duration > 0) {
       int64_t durationTicks = static_cast<int64_t>(duration * 10000000.0);
       timeline.EndTime(winrt::Windows::Foundation::TimeSpan(durationTicks));
@@ -312,12 +470,21 @@ void OsMediaControlsPlugin::SetPlaybackState(
     }
 
     smtc_.UpdateTimelineProperties(timeline);
-
-    // Set playback rate
     smtc_.PlaybackRate(speed);
 
   } catch (winrt::hresult_error const &) {
-    // Ignore playback state update errors
+  }
+}
+
+void OsMediaControlsPlugin::ClearOnThread() {
+  if (!smtc_) return;
+
+  try {
+    smtc_.DisplayUpdater().ClearAll();
+    smtc_.DisplayUpdater().Update();
+    smtc_.PlaybackStatus(MediaPlaybackStatus::Closed);
+    smtc_.IsEnabled(false);
+  } catch (...) {
   }
 }
 
@@ -349,15 +516,14 @@ void OsMediaControlsPlugin::HandleButtonPressed(
     break;
 
   default:
-    return; // Unknown button
+    return;
   }
 
-  SendEvent(event);
+  QueueEventForMainThread(event);
 }
 
-void OsMediaControlsPlugin::EnableControl(const std::string &control) {
-  if (!smtc_)
-    return;
+void OsMediaControlsPlugin::EnableControlOnThread(const std::string &control) {
+  if (!smtc_) return;
 
   try {
     if (control == "play") {
@@ -371,15 +537,12 @@ void OsMediaControlsPlugin::EnableControl(const std::string &control) {
     } else if (control == "previous") {
       smtc_.IsPreviousEnabled(true);
     }
-    // Note: Windows doesn't have separate seek control enable
   } catch (winrt::hresult_error const &) {
-    // Ignore enable errors
   }
 }
 
-void OsMediaControlsPlugin::DisableControl(const std::string &control) {
-  if (!smtc_)
-    return;
+void OsMediaControlsPlugin::DisableControlOnThread(const std::string &control) {
+  if (!smtc_) return;
 
   try {
     if (control == "play") {
@@ -394,7 +557,6 @@ void OsMediaControlsPlugin::DisableControl(const std::string &control) {
       smtc_.IsPreviousEnabled(false);
     }
   } catch (winrt::hresult_error const &) {
-    // Ignore disable errors
   }
 }
 
@@ -402,7 +564,6 @@ winrt::hstring OsMediaControlsPlugin::StringToHString(const std::string &str) {
   if (str.empty())
     return winrt::hstring();
 
-  // Convert UTF-8 std::string to wide string using Windows API
   int size_needed = MultiByteToWideChar(CP_UTF8, 0, str.c_str(),
                                         static_cast<int>(str.length()),
                                         nullptr, 0);
@@ -418,33 +579,15 @@ winrt::hstring OsMediaControlsPlugin::StringToHString(const std::string &str) {
 }
 
 RandomAccessStreamReference
-OsMediaControlsPlugin::CreateStreamReferenceFromBytes(
-    const std::vector<uint8_t> &bytes) {
-
-  if (bytes.empty()) {
+OsMediaControlsPlugin::CreateStreamReferenceFromUri(const std::string &uri_str) {
+  if (uri_str.empty()) {
     return nullptr;
   }
 
   try {
-    // Create in-memory stream
-    InMemoryRandomAccessStream stream;
-    DataWriter writer(stream);
-
-    // Write bytes to stream
-    writer.WriteBytes(winrt::array_view<const uint8_t>(
-        bytes.data(), bytes.data() + bytes.size()));
-
-    // Store the data (synchronous call - use .get() to wait)
-    writer.StoreAsync().get();
-    writer.DetachStream();
-
-    // Seek to beginning
-    stream.Seek(0);
-
-    // Create stream reference
-    return RandomAccessStreamReference::CreateFromStream(stream);
-
-  } catch (winrt::hresult_error const &) {
+    auto uri = winrt::Windows::Foundation::Uri(StringToHString(uri_str));
+    return RandomAccessStreamReference::CreateFromUri(uri);
+  } catch (...) {
     return nullptr;
   }
 }

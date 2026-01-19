@@ -10,12 +10,21 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <functional>
+#include <queue>
+#include <optional>
 
 // C++/WinRT headers for SystemMediaTransportControls
 #include <winrt/base.h>
 #include <winrt/Windows.Media.h>
+#include <winrt/Windows.Media.Playback.h>
 #include <winrt/Windows.Storage.Streams.h>
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.System.h>
+#include <DispatcherQueue.h>
 
 namespace os_media_controls {
 
@@ -40,6 +49,9 @@ class OsMediaControlsPlugin : public flutter::Plugin {
   // Event sink for sending events to Dart
   std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> event_sink_;
 
+  // MediaPlayer instance (required for SMTC on desktop apps)
+  winrt::Windows::Media::Playback::MediaPlayer media_player_{nullptr};
+
   // SystemMediaTransportControls instance
   winrt::Windows::Media::SystemMediaTransportControls smtc_{nullptr};
 
@@ -47,11 +59,28 @@ class OsMediaControlsPlugin : public flutter::Plugin {
   winrt::event_token button_pressed_token_;
   winrt::event_token position_change_token_;
 
-  // Flutter window HWND (needed for SMTC initialization)
-  HWND hwnd_{nullptr};
-
   // Store registrar reference
   flutter::PluginRegistrarWindows* registrar_;
+
+  // STA thread for SMTC operations
+  std::thread smtc_thread_;
+  std::atomic<bool> smtc_thread_running_{false};
+  DWORD smtc_thread_id_{0};
+
+  // Main thread window handle for dispatching events back to Flutter
+  HWND main_window_{nullptr};
+
+  // Pending events queue (thread-safe)
+  std::mutex events_mutex_;
+  std::queue<flutter::EncodableMap> pending_events_;
+
+  // Window proc for handling events on main thread
+  static LRESULT CALLBACK WndProcHook(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR subclassId, DWORD_PTR refData);
+  void ProcessPendingEvents();
+  void QueueEventForMainThread(const flutter::EncodableMap& event);
+
+  // DispatcherQueue for WinRT (required for MediaPlayer)
+  winrt::Windows::System::DispatcherQueueController dispatcher_queue_controller_{nullptr};
 
   // Helper methods for plugin functionality
   void SetMetadata(const flutter::EncodableValue *args);
@@ -60,17 +89,28 @@ class OsMediaControlsPlugin : public flutter::Plugin {
   std::string GetStringFromMap(const flutter::EncodableMap &map, const std::string &key);
   double GetDoubleFromMap(const flutter::EncodableMap &map, const std::string &key);
 
-  // SMTC-specific helper methods
-  void InitializeSMTC(HWND hwnd);
+  // STA thread methods
+  void SmtcThreadProc();
+  void PostToSmtcThread(std::function<void()> func);
+
+  // SMTC-specific helper methods (called on STA thread)
+  void InitializeSMTCOnThread();
+  void InitializeSMTCWithWindow(HWND hwnd);
   void CleanupSMTC();
   void HandleButtonPressed(winrt::Windows::Media::SystemMediaTransportControlsButton button);
-  void EnableControl(const std::string& control);
-  void DisableControl(const std::string& control);
+  void EnableControlOnThread(const std::string& control);
+  void DisableControlOnThread(const std::string& control);
+  void SetMetadataOnThread(const std::string& title, const std::string& artist,
+                           const std::string& album, const std::string& albumArtist,
+                           const std::string& artworkUri);
+  void SetPlaybackStateOnThread(const std::string& state, double position,
+                                double duration, double speed);
+  void ClearOnThread();
 
   // WinRT conversion helpers
   winrt::hstring StringToHString(const std::string& str);
   winrt::Windows::Storage::Streams::RandomAccessStreamReference
-      CreateStreamReferenceFromBytes(const std::vector<uint8_t>& bytes);
+      CreateStreamReferenceFromUri(const std::string& uri);
 };
 
 }  // namespace os_media_controls
