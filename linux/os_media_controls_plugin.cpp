@@ -545,7 +545,7 @@ void OsMediaControlsPluginImpl::HandleMethodCallDBus(
   }
 
   // Send event to Flutter
-  self->SendEvent(g_steal_pointer(&event));
+  self->SendEvent(static_cast<FlValue*>(g_steal_pointer(&event)));
 
   g_dbus_method_invocation_return_value(invocation, nullptr);
 }
@@ -739,7 +739,7 @@ gboolean OsMediaControlsPluginImpl::HandleSetProperty(
     fl_value_set_string_take(event, "type", fl_value_new_string("setSpeed"));
     fl_value_set_string_take(event, "speed", fl_value_new_float(rate));
 
-    self->SendEvent(g_steal_pointer(&event));
+    self->SendEvent(static_cast<FlValue*>(g_steal_pointer(&event)));
 
     return TRUE;
   }
