@@ -129,6 +129,10 @@ class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
 
     private fun registerNoisyAudioReceiver() {
         if (isNoisyReceiverRegistered) return
+        // Android TV outputs audio over HDMI. ACTION_AUDIO_BECOMING_NOISY fires
+        // spuriously during HDMI renegotiation (e.g. frame rate matching) and is
+        // not meaningful for the TV form factor.
+        if (context.packageManager.hasSystemFeature("android.software.leanback")) return
 
         noisyAudioReceiver = createNoisyAudioReceiver()
         val intentFilter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
