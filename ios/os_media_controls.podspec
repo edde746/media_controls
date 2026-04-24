@@ -15,7 +15,8 @@ A Flutter plugin for integrating with OS-level media controls across iOS, macOS,
   s.source           = { :path => '.' }
   s.source_files = 'Classes/**/*'
   s.dependency 'Flutter'
-  s.platform = :ios, '12.0'
+  s.ios.deployment_target  = '12.0'
+  s.tvos.deployment_target = '13.0'
 
   # Flutter.framework does not contain a i386 slice.
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES', 'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386' }
