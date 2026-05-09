@@ -1,4 +1,4 @@
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 
 /// Metadata for the currently playing media.
 ///
@@ -51,7 +51,8 @@ class MediaMetadata {
       if (artist != null) 'artist': artist,
       if (album != null) 'album': album,
       if (albumArtist != null) 'albumArtist': albumArtist,
-      if (duration != null) 'duration': duration!.inSeconds.toDouble(),
+      if (duration != null)
+        'duration': duration!.inMilliseconds / Duration.millisecondsPerSecond,
       if (artwork != null) 'artwork': artwork,
       if (artworkUrl != null) 'artworkUrl': artworkUrl,
     };
@@ -71,7 +72,9 @@ class MediaMetadata {
         other.artist == artist &&
         other.album == album &&
         other.albumArtist == albumArtist &&
-        other.duration == duration;
+        other.duration == duration &&
+        listEquals(other.artwork, artwork) &&
+        other.artworkUrl == artworkUrl;
   }
 
   @override
@@ -82,6 +85,8 @@ class MediaMetadata {
       album,
       albumArtist,
       duration,
+      Object.hashAll(artwork ?? const <int>[]),
+      artworkUrl,
     );
   }
 }

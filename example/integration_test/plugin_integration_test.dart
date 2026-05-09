@@ -1,12 +1,3 @@
-// This is a basic Flutter integration test.
-//
-// Since integration tests run in a full Flutter application, they can interact
-// with the host side of a plugin implementation, unlike Dart unit tests.
-//
-// For more information about Flutter integration tests, please see
-// https://flutter.dev/to/integration-testing
-
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
@@ -15,11 +6,25 @@ import 'package:os_media_controls/os_media_controls.dart';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('getPlatformVersion test', (WidgetTester tester) async {
-    final OsMediaControls plugin = OsMediaControls();
-    final String? version = await plugin.getPlatformVersion();
-    // The version string depends on the host platform running the test, so
-    // just assert that some non-empty string is returned.
-    expect(version?.isNotEmpty, true);
+  testWidgets('media controls accept basic state updates', (
+    WidgetTester tester,
+  ) async {
+    await OsMediaControls.setMetadata(
+      const MediaMetadata(
+        title: 'Integration Test Track',
+        artist: 'OS Media Controls',
+        duration: Duration(minutes: 1, seconds: 30),
+      ),
+    );
+
+    await OsMediaControls.setPlaybackState(
+      const MediaPlaybackState(
+        state: PlaybackState.paused,
+        position: Duration(seconds: 3),
+        speed: 0,
+      ),
+    );
+
+    await OsMediaControls.clear();
   });
 }

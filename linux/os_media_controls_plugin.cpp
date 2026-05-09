@@ -5,13 +5,17 @@
 #include <sys/utsname.h>
 #include <gio/gio.h>
 
+#include <cctype>
 #include <cstring>
 #include <cmath>
+#include <cstdio>
 #include <memory>
 #include <sstream>
 #include <fstream>
 #include <iomanip>
 #include <chrono>
+#include <stdexcept>
+#include <unistd.h>
 
 #define OS_MEDIA_CONTROLS_PLUGIN(obj) \
   (G_TYPE_CHECK_INSTANCE_CAST((obj), os_media_controls_plugin_get_type(), \
@@ -54,9 +58,6 @@ static const gchar introspection_xml[] =
   "      <arg direction='in' name='TrackId' type='o'/>"
   "      <arg direction='in' name='Position' type='x'/>"
   "    </method>"
-  "    <method name='OpenUri'>"
-  "      <arg direction='in' name='Uri' type='s'/>"
-  "    </method>"
   "    <signal name='Seeked'>"
   "      <arg name='Position' type='x'/>"
   "    </signal>"
@@ -77,6 +78,30 @@ static const gchar introspection_xml[] =
   "</node>";
 
 namespace os_media_controls {
+
+std::string SanitizeDBusNameComponent(const char* value) {
+  std::string input = value && value[0] != '\0' ? value : "OsMediaControls";
+  std::string sanitized;
+
+  for (unsigned char ch : input) {
+    if (std::isalnum(ch) || ch == '_') {
+      sanitized.push_back(static_cast<char>(ch));
+    } else {
+      sanitized.push_back('_');
+    }
+  }
+
+  if (sanitized.empty()) {
+    sanitized = "OsMediaControls";
+  }
+
+  unsigned char first = static_cast<unsigned char>(sanitized[0]);
+  if (!std::isalpha(first) && sanitized[0] != '_') {
+    sanitized.insert(sanitized.begin(), '_');
+  }
+
+  return sanitized;
+}
 
 // Helper to convert FlValue to string
 std::string OsMediaControlsPluginImpl::GetStringFromFlValue(FlValue* map, const char* key) {
@@ -404,10 +429,17 @@ void OsMediaControlsPluginImpl::InitializeMPRIS() {
     return;
   }
 
-  // Request bus name
+  // Request a bus name that is unique to the host app instead of the plugin.
+  const char* app_name = g_get_prgname();
+  if (!app_name || app_name[0] == '\0') {
+    app_name = g_get_application_name();
+  }
+  std::string bus_name = "org.mpris.MediaPlayer2." +
+      SanitizeDBusNameComponent(app_name);
+
   bus_id_ = g_bus_own_name_on_connection(
       connection_,
-      "org.mpris.MediaPlayer2.OsMediaControls",
+      bus_name.c_str(),
       G_BUS_NAME_OWNER_FLAGS_NONE,
       nullptr,
       nullptr,

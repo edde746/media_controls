@@ -1,6 +1,6 @@
 import 'dart:async';
-import 'package:flutter/services.dart';
 
+import 'os_media_controls_platform_interface.dart';
 import 'src/media_metadata.dart';
 import 'src/playback_state.dart';
 import 'src/media_control.dart';
@@ -50,15 +50,6 @@ export 'src/media_control_event.dart';
 /// });
 /// ```
 class OsMediaControls {
-  static const MethodChannel _methodChannel = MethodChannel(
-    'com.edde746.os_media_controls/methods',
-  );
-  static const EventChannel _eventChannel = EventChannel(
-    'com.edde746.os_media_controls/events',
-  );
-
-  static Stream<MediaControlEvent>? _eventStream;
-
   /// Stream of control events from the operating system.
   ///
   /// Subscribe to this stream to receive events when users interact with
@@ -75,17 +66,8 @@ class OsMediaControls {
   /// - [SkipForwardEvent]: Skip forward button pressed (iOS/macOS)
   /// - [SkipBackwardEvent]: Skip backward button pressed (iOS/macOS)
   /// - [SetSpeedEvent]: Playback speed change requested
-  static Stream<MediaControlEvent> get controlEvents {
-    _eventStream ??= _eventChannel.receiveBroadcastStream().map((
-      dynamic event,
-    ) {
-      if (event is Map) {
-        return MediaControlEvent.fromMap(event);
-      }
-      throw ArgumentError('Invalid event format');
-    });
-    return _eventStream!;
-  }
+  static Stream<MediaControlEvent> get controlEvents =>
+      OsMediaControlsPlatform.instance.controlEvents;
 
   /// Updates the metadata displayed in system media controls.
   ///
@@ -108,11 +90,7 @@ class OsMediaControls {
   /// ));
   /// ```
   static Future<void> setMetadata(MediaMetadata metadata) async {
-    try {
-      await _methodChannel.invokeMethod('setMetadata', metadata.toMap());
-    } on PlatformException catch (e) {
-      throw Exception('Failed to set metadata: ${e.message}');
-    }
+    await OsMediaControlsPlatform.instance.setMetadata(metadata);
   }
 
   /// Updates the current playback state.
@@ -145,11 +123,7 @@ class OsMediaControls {
   /// ));
   /// ```
   static Future<void> setPlaybackState(MediaPlaybackState state) async {
-    try {
-      await _methodChannel.invokeMethod('setPlaybackState', state.toMap());
-    } on PlatformException catch (e) {
-      throw Exception('Failed to set playback state: ${e.message}');
-    }
+    await OsMediaControlsPlatform.instance.setPlaybackState(state);
   }
 
   /// Enables specific media controls.
@@ -174,14 +148,7 @@ class OsMediaControls {
   /// ]);
   /// ```
   static Future<void> enableControls(List<MediaControl> controls) async {
-    try {
-      await _methodChannel.invokeMethod(
-        'enableControls',
-        controls.map((c) => c.name).toList(),
-      );
-    } on PlatformException catch (e) {
-      throw Exception('Failed to enable controls: ${e.message}');
-    }
+    await OsMediaControlsPlatform.instance.enableControls(controls);
   }
 
   /// Disables specific media controls.
@@ -199,14 +166,7 @@ class OsMediaControls {
   /// ]);
   /// ```
   static Future<void> disableControls(List<MediaControl> controls) async {
-    try {
-      await _methodChannel.invokeMethod(
-        'disableControls',
-        controls.map((c) => c.name).toList(),
-      );
-    } on PlatformException catch (e) {
-      throw Exception('Failed to disable controls: ${e.message}');
-    }
+    await OsMediaControlsPlatform.instance.disableControls(controls);
   }
 
   /// Sets custom skip intervals for skip forward/backward buttons.
@@ -231,14 +191,10 @@ class OsMediaControls {
     Duration? forward,
     Duration? backward,
   }) async {
-    try {
-      await _methodChannel.invokeMethod('setSkipIntervals', {
-        if (forward != null) 'forward': forward.inSeconds,
-        if (backward != null) 'backward': backward.inSeconds,
-      });
-    } on PlatformException catch (e) {
-      throw Exception('Failed to set skip intervals: ${e.message}');
-    }
+    await OsMediaControlsPlatform.instance.setSkipIntervals(
+      forward: forward,
+      backward: backward,
+    );
   }
 
   /// Sets queue information for the current playback session.
@@ -258,14 +214,10 @@ class OsMediaControls {
     required int currentIndex,
     required int queueLength,
   }) async {
-    try {
-      await _methodChannel.invokeMethod('setQueueInfo', {
-        'currentIndex': currentIndex,
-        'queueLength': queueLength,
-      });
-    } on PlatformException catch (e) {
-      throw Exception('Failed to set queue info: ${e.message}');
-    }
+    await OsMediaControlsPlatform.instance.setQueueInfo(
+      currentIndex: currentIndex,
+      queueLength: queueLength,
+    );
   }
 
   /// Clears all media information from system controls.
@@ -278,10 +230,6 @@ class OsMediaControls {
   /// await OsMediaControls.clear();
   /// ```
   static Future<void> clear() async {
-    try {
-      await _methodChannel.invokeMethod('clear');
-    } on PlatformException catch (e) {
-      throw Exception('Failed to clear media controls: ${e.message}');
-    }
+    await OsMediaControlsPlatform.instance.clear();
   }
 }

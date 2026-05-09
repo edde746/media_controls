@@ -9,6 +9,7 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
     private let commandCenter = MPRemoteCommandCenter.shared()
 
     private var currentMetadata: [String: Any] = [:]
+    private var handlersCleared = false
 
 
     public static func register(with registrar: FlutterPluginRegistrar) {
@@ -163,6 +164,8 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
     }
 
     private func setMetadata(arguments: [String: Any]?) {
+        ensureHandlersRegistered()
+
         guard let args = arguments else { return }
 
         // Reactivate audio session to ensure media controls work after being cleared
@@ -221,6 +224,8 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
     }
 
     private func setPlaybackState(arguments: [String: Any]?) {
+        ensureHandlersRegistered()
+
         guard let args = arguments,
               let stateString = args["state"] as? String,
               let position = args["position"] as? Double,
@@ -243,6 +248,8 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
     }
 
     private func enableControls(arguments: [String]?) {
+        ensureHandlersRegistered()
+
         guard let controls = arguments else { return }
 
         for control in controls {
@@ -300,6 +307,8 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
     }
 
     private func setSkipIntervals(arguments: [String: Any]?) {
+        ensureHandlersRegistered()
+
         guard let args = arguments else { return }
 
         if let forward = args["forward"] as? Int {
@@ -339,6 +348,16 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
 
         // Disable all command center buttons
         let commandCenter = MPRemoteCommandCenter.shared()
+        commandCenter.playCommand.removeTarget(nil)
+        commandCenter.pauseCommand.removeTarget(nil)
+        commandCenter.togglePlayPauseCommand.removeTarget(nil)
+        commandCenter.nextTrackCommand.removeTarget(nil)
+        commandCenter.previousTrackCommand.removeTarget(nil)
+        commandCenter.changePlaybackPositionCommand.removeTarget(nil)
+        commandCenter.skipForwardCommand.removeTarget(nil)
+        commandCenter.skipBackwardCommand.removeTarget(nil)
+        commandCenter.changePlaybackRateCommand.removeTarget(nil)
+
         commandCenter.playCommand.isEnabled = false
         commandCenter.pauseCommand.isEnabled = false
         commandCenter.togglePlayPauseCommand.isEnabled = false
@@ -348,8 +367,15 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
         commandCenter.skipForwardCommand.isEnabled = false
         commandCenter.skipBackwardCommand.isEnabled = false
         commandCenter.changePlaybackRateCommand.isEnabled = false
+
+        handlersCleared = true
     }
 
+    private func ensureHandlersRegistered() {
+        guard handlersCleared else { return }
+        setupRemoteCommandCenter()
+        handlersCleared = false
+    }
 
     private func sendEvent(_ event: [String: Any]) {
         eventSink?(event)

@@ -6,22 +6,41 @@
 // tree, read text, and verify that the values of widget properties are correct.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:os_media_controls_example/main.dart';
 
 void main() {
-  testWidgets('Verify Platform version', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  const methodChannel = MethodChannel('com.edde746.os_media_controls/methods');
+  const eventChannel = MethodChannel('com.edde746.os_media_controls/events');
 
-    // Verify that platform version is retrieved.
-    expect(
-      find.byWidgetPredicate(
-        (Widget widget) => widget is Text &&
-                           widget.data!.startsWith('Running on:'),
-      ),
-      findsOneWidget,
-    );
+  setUp(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          methodChannel,
+          (MethodCall call) async => null,
+        );
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          eventChannel,
+          (MethodCall call) async => null,
+        );
+  });
+
+  tearDown(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(methodChannel, null);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(eventChannel, null);
+  });
+
+  testWidgets('shows media controls demo', (WidgetTester tester) async {
+    await tester.pumpWidget(const MyApp());
+    await tester.pump();
+
+    expect(find.text('OS Media Controls Demo'), findsWidgets);
+    expect(find.text('Bohemian Rhapsody'), findsOneWidget);
+    expect(find.byIcon(Icons.play_circle), findsOneWidget);
   });
 }

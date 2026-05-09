@@ -54,7 +54,6 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
   flutter_wrapper_plugin
   WindowsApp  # Required for C++/WinRT and SystemMediaTransportControls
   CoreMessaging  # Required for DispatcherQueue
-  Shell32  # Required for AppUserModelId
   Comctl32  # Required for window subclassing
 )
 

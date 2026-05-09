@@ -34,7 +34,7 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
   // Mock player state
   bool _isPlaying = false;
   Duration _position = Duration.zero;
-  Duration _duration = const Duration(minutes: 3, seconds: 45);
+  final Duration _duration = const Duration(minutes: 3, seconds: 45);
   double _playbackSpeed = 1.0;
   int _currentTrackIndex = 0;
 
@@ -100,7 +100,10 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
   void _listenToControlEvents() {
     OsMediaControls.controlEvents.listen((event) {
       setState(() {
-        _eventLog.insert(0, '${DateTime.now().toIso8601String().substring(11, 19)}: $event');
+        _eventLog.insert(
+          0,
+          '${DateTime.now().toIso8601String().substring(11, 19)}: $event',
+        );
         if (_eventLog.length > 10) {
           _eventLog.removeLast();
         }
@@ -129,14 +132,16 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
   void _updateMetadata() async {
     final track = _playlist[_currentTrackIndex];
 
-    await OsMediaControls.setMetadata(MediaMetadata(
-      title: track['title']!,
-      artist: track['artist']!,
-      album: track['album']!,
-      duration: _duration,
-      // In a real app, you would load actual artwork here
-      artwork: _generatePlaceholderArtwork(),
-    ));
+    await OsMediaControls.setMetadata(
+      MediaMetadata(
+        title: track['title']!,
+        artist: track['artist']!,
+        album: track['album']!,
+        duration: _duration,
+        // In a real app, you would load actual artwork here
+        artwork: _generatePlaceholderArtwork(),
+      ),
+    );
 
     await OsMediaControls.setQueueInfo(
       currentIndex: _currentTrackIndex,
@@ -145,11 +150,13 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
   }
 
   void _updatePlaybackState() async {
-    await OsMediaControls.setPlaybackState(MediaPlaybackState(
-      state: _isPlaying ? PlaybackState.playing : PlaybackState.paused,
-      position: _position,
-      speed: _playbackSpeed,
-    ));
+    await OsMediaControls.setPlaybackState(
+      MediaPlaybackState(
+        state: _isPlaying ? PlaybackState.playing : PlaybackState.paused,
+        position: _position,
+        speed: _playbackSpeed,
+      ),
+    );
   }
 
   void _play() {
@@ -224,9 +231,9 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
       if (_isPlaying && _position < _duration) {
         setState(() {
           _position = Duration(
-            milliseconds: (_position.inMilliseconds +
-                    (1000 * _playbackSpeed).round())
-                .clamp(0, _duration.inMilliseconds),
+            milliseconds:
+                (_position.inMilliseconds + (1000 * _playbackSpeed).round())
+                    .clamp(0, _duration.inMilliseconds),
           );
         });
         _updatePlaybackState();
@@ -301,8 +308,8 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
                   Text(
                     track['title']!,
                     style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
+                      fontWeight: FontWeight.bold,
+                    ),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 8),
@@ -313,9 +320,9 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
                   ),
                   Text(
                     track['album']!,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: Colors.grey[600],
-                        ),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodyMedium?.copyWith(color: Colors.grey[600]),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 32),
@@ -353,7 +360,8 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
                       IconButton(
                         icon: Icon(Icons.replay_10),
                         iconSize: 32,
-                        onPressed: () => _skipBackward(const Duration(seconds: 15)),
+                        onPressed: () =>
+                            _skipBackward(const Duration(seconds: 15)),
                       ),
                       const SizedBox(width: 8),
                       IconButton(
@@ -367,7 +375,8 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
                       IconButton(
                         icon: Icon(Icons.forward_10),
                         iconSize: 32,
-                        onPressed: () => _skipForward(const Duration(seconds: 15)),
+                        onPressed: () =>
+                            _skipForward(const Duration(seconds: 15)),
                       ),
                       const SizedBox(width: 8),
                       IconButton(
@@ -414,13 +423,15 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
                             style: Theme.of(context).textTheme.titleMedium,
                           ),
                           const SizedBox(height: 8),
-                          ..._eventLog.map((event) => Text(
-                                event,
-                                style: const TextStyle(
-                                  fontFamily: 'monospace',
-                                  fontSize: 12,
-                                ),
-                              )),
+                          ..._eventLog.map(
+                            (event) => Text(
+                              event,
+                              style: const TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
                           if (_eventLog.isEmpty)
                             const Text(
                               'No events yet. Try using system media controls!',
@@ -448,11 +459,19 @@ class _MediaPlayerPageState extends State<MediaPlayerPage> {
                             style: Theme.of(context).textTheme.titleMedium,
                           ),
                           const SizedBox(height: 8),
-                          const Text('• iOS/macOS: Use Control Center or lock screen'),
-                          const Text('• Android: Use notification or quick settings'),
+                          const Text(
+                            '• iOS/macOS: Use Control Center or lock screen',
+                          ),
+                          const Text(
+                            '• Android: Use notification or quick settings',
+                          ),
                           const Text('• Windows: Use media keys on keyboard'),
-                          const Text('• Linux: Use GNOME/KDE media controls or keyboard'),
-                          const Text('• Watch the event log below for activity!'),
+                          const Text(
+                            '• Linux: Use GNOME/KDE media controls or keyboard',
+                          ),
+                          const Text(
+                            '• Watch the event log below for activity!',
+                          ),
                         ],
                       ),
                     ),

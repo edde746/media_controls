@@ -42,7 +42,7 @@ class MediaPlaybackState {
   Map<String, dynamic> toMap() {
     return {
       'state': state.name,
-      'position': position.inSeconds.toDouble(),
+      'position': position.inMilliseconds / Duration.millisecondsPerSecond,
       'speed': speed,
     };
   }

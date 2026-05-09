@@ -65,7 +65,7 @@ class OsMediaControlsPlugin : public flutter::Plugin {
   // STA thread for SMTC operations
   std::thread smtc_thread_;
   std::atomic<bool> smtc_thread_running_{false};
-  DWORD smtc_thread_id_{0};
+  std::atomic<DWORD> smtc_thread_id_{0};
 
   // Main thread window handle for dispatching events back to Flutter
   HWND main_window_{nullptr};
@@ -81,6 +81,9 @@ class OsMediaControlsPlugin : public flutter::Plugin {
 
   // DispatcherQueue for WinRT (required for MediaPlayer)
   winrt::Windows::System::DispatcherQueueController dispatcher_queue_controller_{nullptr};
+
+  // Duration from the latest metadata update, used for SMTC seek timelines.
+  double current_duration_{0.0};
 
   // Helper methods for plugin functionality
   void SetMetadata(const flutter::EncodableValue *args);
@@ -102,7 +105,7 @@ class OsMediaControlsPlugin : public flutter::Plugin {
   void DisableControlOnThread(const std::string& control);
   void SetMetadataOnThread(const std::string& title, const std::string& artist,
                            const std::string& album, const std::string& albumArtist,
-                           const std::string& artworkUri);
+                           const std::string& artworkUri, double duration);
   void SetPlaybackStateOnThread(const std::string& state, double position,
                                 double duration, double speed);
   void ClearOnThread();

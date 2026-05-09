@@ -238,6 +238,8 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
     }
 
     private func enableControls(arguments: [String]?) {
+        ensureHandlersRegistered()
+
         guard let controls = arguments else { return }
 
         for control in controls {
@@ -295,6 +297,8 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
     }
 
     private func setSkipIntervals(arguments: [String: Any]?) {
+        ensureHandlersRegistered()
+
         guard let args = arguments else { return }
 
         if let forward = args["forward"] as? Int {

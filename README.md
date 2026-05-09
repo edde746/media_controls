@@ -1,13 +1,13 @@
 # os_media_controls
 
-Flutter plugin for OS-level media controls on iOS, macOS, Android, and Windows. Displays rich media info in system UI and handles control events from lock screens, notifications, media keys, etc.
+Flutter plugin for OS-level media controls on iOS, macOS, Android, Windows, and Linux. Displays rich media info in system UI and handles control events from lock screens, control centers, media keys, and MPRIS clients.
 
 ## Features
 
-- Cross-platform: iOS, macOS, Android, Windows
+- Cross-platform: iOS, macOS, Android, Windows, Linux
 - Metadata: Title, artist, album, artwork, duration
 - Controls: Play/pause/next/prev/seek/speed
-- Integration: Lock screen, Control Center, notifications, CarPlay, Android Auto, media keys
+- Integration: Lock screen, Control Center, MediaSession, SMTC, MPRIS, media keys
 - Advanced: Custom skips (15/30s), queue display, speed control, position updates
 
 ## Platform Support
@@ -18,6 +18,7 @@ Flutter plugin for OS-level media controls on iOS, macOS, Android, and Windows. 
 | macOS   | 10.14+     | Control Center |
 | Android | API 21+    | MediaSession, Auto/Wear |
 | Windows | 10+        | SMTC (partial) |
+| Linux   | GLib/GIO   | MPRIS over D-Bus |
 
 ## Installation
 
@@ -25,7 +26,7 @@ In `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  os_media_controls: ^0.0.1
+  os_media_controls: ^0.2.1
 ```
 
 Run: `flutter pub get`
@@ -68,7 +69,11 @@ Add to `AndroidManifest.xml`:
 <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 ```
 
-Use foreground service for background playback.
+Use a foreground media service/notification for reliable background playback and Android system media surfaces.
+
+### Linux
+
+Uses MPRIS over the session D-Bus. No extra setup is normally required on GNOME/KDE desktops.
 
 ### Windows
 

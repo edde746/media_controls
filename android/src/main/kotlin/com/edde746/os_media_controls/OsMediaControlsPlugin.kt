@@ -30,6 +30,17 @@ class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
     private var currentState: Int = PlaybackStateCompat.STATE_NONE
     private var currentPosition: Long = 0
     private var currentSpeed: Float = 1.0f
+    private val enabledControls = mutableSetOf(
+        "play",
+        "pause",
+        "stop",
+        "next",
+        "previous",
+        "seek",
+        "skipForward",
+        "skipBackward",
+        "changeSpeed"
+    )
 
     // Audio becoming noisy (headphone/Bluetooth disconnect) handling
     private var noisyAudioReceiver: BroadcastReceiver? = null
@@ -171,13 +182,11 @@ class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
                 result.success(null)
             }
             "enableControls" -> {
-                // Android enables controls via PlaybackState actions
-                // This is handled in setPlaybackState
+                updateEnabledControls(call.arguments, true)
                 result.success(null)
             }
             "disableControls" -> {
-                // Android disables controls via PlaybackState actions
-                // This would require tracking which controls to exclude
+                updateEnabledControls(call.arguments, false)
                 result.success(null)
             }
             "setSkipIntervals" -> {
@@ -275,23 +284,70 @@ class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
         currentPosition = (positionSeconds * 1000).toLong() // Convert to milliseconds
         currentSpeed = speed
 
-        val actions = PlaybackStateCompat.ACTION_PLAY or
-                PlaybackStateCompat.ACTION_PAUSE or
-                PlaybackStateCompat.ACTION_PLAY_PAUSE or
-                PlaybackStateCompat.ACTION_STOP or
-                PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
-                PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
-                PlaybackStateCompat.ACTION_SEEK_TO or
-                PlaybackStateCompat.ACTION_SET_PLAYBACK_SPEED or
-                PlaybackStateCompat.ACTION_FAST_FORWARD or
-                PlaybackStateCompat.ACTION_REWIND
+        updatePlaybackState()
+    }
 
+    private fun updateEnabledControls(arguments: Any?, enabled: Boolean) {
+        val controls = arguments as? List<*> ?: return
+
+        controls.forEach { control ->
+            val controlName = control as? String ?: return@forEach
+            if (enabled) {
+                enabledControls.add(controlName)
+            } else {
+                enabledControls.remove(controlName)
+            }
+        }
+
+        if (::mediaSession.isInitialized) {
+            updatePlaybackState()
+        }
+    }
+
+    private fun updatePlaybackState() {
         val playbackState = PlaybackStateCompat.Builder()
             .setState(currentState, currentPosition, currentSpeed)
-            .setActions(actions)
+            .setActions(buildPlaybackActions())
             .build()
 
         mediaSession.setPlaybackState(playbackState)
+    }
+
+    private fun buildPlaybackActions(): Long {
+        var actions = 0L
+
+        if (enabledControls.contains("play")) {
+            actions = actions or PlaybackStateCompat.ACTION_PLAY
+        }
+        if (enabledControls.contains("pause")) {
+            actions = actions or PlaybackStateCompat.ACTION_PAUSE
+        }
+        if (enabledControls.contains("play") && enabledControls.contains("pause")) {
+            actions = actions or PlaybackStateCompat.ACTION_PLAY_PAUSE
+        }
+        if (enabledControls.contains("stop")) {
+            actions = actions or PlaybackStateCompat.ACTION_STOP
+        }
+        if (enabledControls.contains("next")) {
+            actions = actions or PlaybackStateCompat.ACTION_SKIP_TO_NEXT
+        }
+        if (enabledControls.contains("previous")) {
+            actions = actions or PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
+        }
+        if (enabledControls.contains("seek")) {
+            actions = actions or PlaybackStateCompat.ACTION_SEEK_TO
+        }
+        if (enabledControls.contains("changeSpeed")) {
+            actions = actions or PlaybackStateCompat.ACTION_SET_PLAYBACK_SPEED
+        }
+        if (enabledControls.contains("skipForward")) {
+            actions = actions or PlaybackStateCompat.ACTION_FAST_FORWARD
+        }
+        if (enabledControls.contains("skipBackward")) {
+            actions = actions or PlaybackStateCompat.ACTION_REWIND
+        }
+
+        return actions
     }
 
     private fun clear() {

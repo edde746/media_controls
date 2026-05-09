@@ -14,9 +14,6 @@
 #include <DispatcherQueue.h>
 #include <commctrl.h>
 
-// Declare SetCurrentProcessExplicitAppUserModelID manually to avoid header conflicts
-extern "C" HRESULT WINAPI SetCurrentProcessExplicitAppUserModelID(_In_ PCWSTR AppID);
-
 // Subclass ID for our window hook
 #define SMTC_SUBCLASS_ID 1
 
@@ -79,9 +76,6 @@ OsMediaControlsPlugin::OsMediaControlsPlugin(
     flutter::PluginRegistrarWindows *registrar)
     : registrar_(registrar) {
 
-  // Set AppUserModelId for the process - helps Windows identify the app in SMTC
-  SetCurrentProcessExplicitAppUserModelID(L"com.edde746.os_media_controls.example");
-
   // Get main window handle and subclass it for event dispatching
   auto view = registrar_->GetView();
   if (view) {
@@ -97,7 +91,7 @@ OsMediaControlsPlugin::OsMediaControlsPlugin(
   smtc_thread_ = std::thread(&OsMediaControlsPlugin::SmtcThreadProc, this);
 
   // Wait for thread to initialize and get its ID
-  while (smtc_thread_id_ == 0 && smtc_thread_running_) {
+  while (smtc_thread_id_.load() == 0 && smtc_thread_running_) {
     Sleep(1);
   }
 }
@@ -109,9 +103,10 @@ OsMediaControlsPlugin::~OsMediaControlsPlugin() {
   }
 
   // Signal thread to stop
-  if (smtc_thread_running_ && smtc_thread_id_ != 0) {
+  DWORD smtc_thread_id = smtc_thread_id_.load();
+  if (smtc_thread_running_ && smtc_thread_id != 0) {
     smtc_thread_running_ = false;
-    PostThreadMessage(smtc_thread_id_, WM_QUIT, 0, 0);
+    PostThreadMessage(smtc_thread_id, WM_QUIT, 0, 0);
   }
 
   // Wait for thread to finish
@@ -175,12 +170,12 @@ void OsMediaControlsPlugin::SmtcThreadProc() {
     winrt::attach_abi(dispatcher_queue_controller_, controller);
   }
 
-  // Store thread ID for posting messages
-  smtc_thread_id_ = GetCurrentThreadId();
-
   // Create message queue
   MSG msg;
   PeekMessage(&msg, nullptr, 0, 0, PM_NOREMOVE);
+
+  // Store thread ID after the message queue exists so PostThreadMessage works.
+  smtc_thread_id_.store(GetCurrentThreadId());
 
   // Initialize SMTC with MediaPlayer
   InitializeSMTCOnThread();
@@ -210,9 +205,10 @@ void OsMediaControlsPlugin::SmtcThreadProc() {
 }
 
 void OsMediaControlsPlugin::PostToSmtcThread(std::function<void()> func) {
-  if (smtc_thread_id_ != 0 && smtc_thread_running_) {
+  DWORD smtc_thread_id = smtc_thread_id_.load();
+  if (smtc_thread_id != 0 && smtc_thread_running_) {
     auto* funcPtr = new std::function<void()>(std::move(func));
-    if (!PostThreadMessage(smtc_thread_id_, WM_SMTC_WORK, 0,
+    if (!PostThreadMessage(smtc_thread_id, WM_SMTC_WORK, 0,
                            reinterpret_cast<LPARAM>(funcPtr))) {
       delete funcPtr;
     }
@@ -372,20 +368,26 @@ void OsMediaControlsPlugin::SetMetadata(const flutter::EncodableValue *args) {
   std::string album = GetStringFromMap(map, "album");
   std::string albumArtist = GetStringFromMap(map, "albumArtist");
   std::string artworkUri = GetStringFromMap(map, "artworkUrl");
+  double duration = GetDoubleFromMap(map, "duration");
 
-  PostToSmtcThread([this, title, artist, album, albumArtist, artworkUri]() {
-    SetMetadataOnThread(title, artist, album, albumArtist, artworkUri);
+  PostToSmtcThread([this, title, artist, album, albumArtist, artworkUri,
+                    duration]() {
+    SetMetadataOnThread(title, artist, album, albumArtist, artworkUri, duration);
   });
 }
 
 void OsMediaControlsPlugin::SetMetadataOnThread(
     const std::string& title, const std::string& artist,
     const std::string& album, const std::string& albumArtist,
-    const std::string& artworkUri) {
+    const std::string& artworkUri, double duration) {
 
   if (!smtc_) return;
 
   try {
+    if (duration > 0) {
+      current_duration_ = duration;
+    }
+
     auto updater = smtc_.DisplayUpdater();
     updater.Type(MediaPlaybackType::Music);
 
@@ -463,8 +465,9 @@ void OsMediaControlsPlugin::SetPlaybackStateOnThread(
     timeline.Position(winrt::Windows::Foundation::TimeSpan(positionTicks));
     timeline.MinSeekTime(winrt::Windows::Foundation::TimeSpan(0));
 
-    if (duration > 0) {
-      int64_t durationTicks = static_cast<int64_t>(duration * 10000000.0);
+    double timeline_duration = duration > 0 ? duration : current_duration_;
+    if (timeline_duration > 0) {
+      int64_t durationTicks = static_cast<int64_t>(timeline_duration * 10000000.0);
       timeline.EndTime(winrt::Windows::Foundation::TimeSpan(durationTicks));
       timeline.MaxSeekTime(timeline.EndTime());
     }
@@ -484,6 +487,7 @@ void OsMediaControlsPlugin::ClearOnThread() {
     smtc_.DisplayUpdater().Update();
     smtc_.PlaybackStatus(MediaPlaybackStatus::Closed);
     smtc_.IsEnabled(false);
+    current_duration_ = 0.0;
   } catch (...) {
   }
 }
