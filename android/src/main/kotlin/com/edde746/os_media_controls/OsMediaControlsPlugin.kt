@@ -57,48 +57,48 @@ class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
         mediaSession = MediaSessionCompat(context, "OsMediaControls").apply {
             setCallback(object : MediaSessionCompat.Callback() {
                 override fun onPlay() {
-                    sendEvent(mapOf("type" to "play"))
+                    sendSessionEvent(mapOf("type" to "play"))
                 }
 
                 override fun onPause() {
-                    sendEvent(mapOf("type" to "pause"))
+                    sendSessionEvent(mapOf("type" to "pause"))
                 }
 
                 override fun onStop() {
-                    sendEvent(mapOf("type" to "stop"))
+                    sendSessionEvent(mapOf("type" to "stop"))
                 }
 
                 override fun onSkipToNext() {
-                    sendEvent(mapOf("type" to "next"))
+                    sendSessionEvent(mapOf("type" to "next"))
                 }
 
                 override fun onSkipToPrevious() {
-                    sendEvent(mapOf("type" to "previous"))
+                    sendSessionEvent(mapOf("type" to "previous"))
                 }
 
                 override fun onSeekTo(position: Long) {
-                    sendEvent(mapOf(
+                    sendSessionEvent(mapOf(
                         "type" to "seek",
                         "position" to position / 1000.0 // Convert to seconds
                     ))
                 }
 
                 override fun onSetPlaybackSpeed(speed: Float) {
-                    sendEvent(mapOf(
+                    sendSessionEvent(mapOf(
                         "type" to "setSpeed",
                         "speed" to speed.toDouble()
                     ))
                 }
 
                 override fun onFastForward() {
-                    sendEvent(mapOf(
+                    sendSessionEvent(mapOf(
                         "type" to "skipForward",
                         "interval" to 15.0
                     ))
                 }
 
                 override fun onRewind() {
-                    sendEvent(mapOf(
+                    sendSessionEvent(mapOf(
                         "type" to "skipBackward",
                         "interval" to 15.0
                     ))
@@ -109,8 +109,7 @@ class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
                 MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or
                 MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
             )
-
-            isActive = true
+            isActive = false
         }
     }
 
@@ -201,6 +200,7 @@ class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
 
     private fun setMetadata(arguments: Map<String, Any>?) {
         arguments ?: return
+        mediaSession.isActive = true
 
         val builder = MediaMetadataCompat.Builder()
 
@@ -262,6 +262,8 @@ class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
             else -> PlaybackStateCompat.STATE_NONE
         }
 
+        mediaSession.isActive = currentState != PlaybackStateCompat.STATE_NONE
+
         // Manage noisy audio receiver based on playback state
         if (currentState == PlaybackStateCompat.STATE_PLAYING) {
             registerNoisyAudioReceiver()
@@ -301,6 +303,12 @@ class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
             .setActions(0)
             .build()
         mediaSession.setPlaybackState(playbackState)
+        mediaSession.isActive = false
+    }
+
+    private fun sendSessionEvent(event: Map<String, Any>) {
+        if (!mediaSession.isActive) return
+        sendEvent(event)
     }
 
     private fun sendEvent(event: Map<String, Any>) {
