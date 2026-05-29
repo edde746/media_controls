@@ -38,6 +38,16 @@ abstract class MediaControlEvent {
         return SetSpeedEvent(speed);
       case 'togglePlayPause':
         return const TogglePlayPauseEvent();
+      case 'audioInterruptionBegan':
+        return const AudioInterruptionBeganEvent();
+      case 'audioInterruptionEnded':
+        return AudioInterruptionEndedEvent(
+          shouldResume: map['shouldResume'] == true,
+        );
+      case 'audioRouteOldDeviceUnavailable':
+        return const AudioRouteOldDeviceUnavailableEvent();
+      case 'audioRouteNewDeviceAvailable':
+        return const AudioRouteNewDeviceAvailableEvent();
       default:
         throw ArgumentError('Unknown event type: $type');
     }
@@ -74,6 +84,52 @@ class TogglePlayPauseEvent extends MediaControlEvent {
 
   @override
   String toString() => 'TogglePlayPauseEvent()';
+}
+
+/// Event triggered when the iOS audio session is interrupted.
+class AudioInterruptionBeganEvent extends MediaControlEvent {
+  const AudioInterruptionBeganEvent();
+
+  @override
+  String toString() => 'AudioInterruptionBeganEvent()';
+}
+
+/// Event triggered when an iOS audio session interruption ends.
+class AudioInterruptionEndedEvent extends MediaControlEvent {
+  /// Whether the system says playback should resume automatically.
+  final bool shouldResume;
+
+  const AudioInterruptionEndedEvent({required this.shouldResume});
+
+  @override
+  String toString() =>
+      'AudioInterruptionEndedEvent(shouldResume: $shouldResume)';
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is AudioInterruptionEndedEvent &&
+        other.shouldResume == shouldResume;
+  }
+
+  @override
+  int get hashCode => shouldResume.hashCode;
+}
+
+/// Event triggered when a private audio route is disconnected on iOS.
+class AudioRouteOldDeviceUnavailableEvent extends MediaControlEvent {
+  const AudioRouteOldDeviceUnavailableEvent();
+
+  @override
+  String toString() => 'AudioRouteOldDeviceUnavailableEvent()';
+}
+
+/// Event triggered when a private audio route is connected on iOS.
+class AudioRouteNewDeviceAvailableEvent extends MediaControlEvent {
+  const AudioRouteNewDeviceAvailableEvent();
+
+  @override
+  String toString() => 'AudioRouteNewDeviceAvailableEvent()';
 }
 
 /// Event triggered when the next track button is pressed

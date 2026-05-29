@@ -48,6 +48,25 @@ void main() {
       MediaControlEvent.fromMap({'type': 'setSpeed', 'speed': 1.5}),
       const SetSpeedEvent(1.5),
     );
+    expect(
+      MediaControlEvent.fromMap({'type': 'audioInterruptionBegan'}),
+      isA<AudioInterruptionBeganEvent>(),
+    );
+    expect(
+      MediaControlEvent.fromMap({
+        'type': 'audioInterruptionEnded',
+        'shouldResume': true,
+      }),
+      const AudioInterruptionEndedEvent(shouldResume: true),
+    );
+    expect(
+      MediaControlEvent.fromMap({'type': 'audioRouteOldDeviceUnavailable'}),
+      isA<AudioRouteOldDeviceUnavailableEvent>(),
+    );
+    expect(
+      MediaControlEvent.fromMap({'type': 'audioRouteNewDeviceAvailable'}),
+      isA<AudioRouteNewDeviceAvailableEvent>(),
+    );
   });
 
   test('static API forwards method calls to platform channel', () async {

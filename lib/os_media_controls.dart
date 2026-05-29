@@ -60,6 +60,10 @@ class OsMediaControls {
   /// - [PauseEvent]: Pause button pressed
   /// - [StopEvent]: Stop button pressed
   /// - [TogglePlayPauseEvent]: Toggle play/pause button pressed (iOS/macOS)
+  /// - [AudioInterruptionBeganEvent]: Audio session interruption started (iOS)
+  /// - [AudioInterruptionEndedEvent]: Audio session interruption ended (iOS)
+  /// - [AudioRouteOldDeviceUnavailableEvent]: Private audio route disconnected (iOS)
+  /// - [AudioRouteNewDeviceAvailableEvent]: Private audio route connected (iOS)
   /// - [NextTrackEvent]: Next track button pressed
   /// - [PreviousTrackEvent]: Previous track button pressed
   /// - [SeekEvent]: User seeked to a position

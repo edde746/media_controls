@@ -36,6 +36,27 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
         }
 
         setupRemoteCommandCenter()
+        setupAudioSessionObservers()
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    private func setupAudioSessionObservers() {
+        let session = AVAudioSession.sharedInstance()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAudioSessionInterruption(_:)),
+            name: AVAudioSession.interruptionNotification,
+            object: session
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAudioRouteChange(_:)),
+            name: AVAudioSession.routeChangeNotification,
+            object: session
+        )
     }
 
     private func setupRemoteCommandCenter() {
@@ -245,6 +266,21 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
             stateString == "playing" ? speed : 0.0
 
         nowPlayingCenter.nowPlayingInfo = nowPlayingInfo
+
+        #if os(iOS)
+        if #available(iOS 13.0, *) {
+            switch stateString {
+            case "playing":
+                nowPlayingCenter.playbackState = .playing
+            case "paused":
+                nowPlayingCenter.playbackState = .paused
+            case "stopped":
+                nowPlayingCenter.playbackState = .stopped
+            default:
+                nowPlayingCenter.playbackState = .unknown
+            }
+        }
+        #endif
     }
 
     private func enableControls(arguments: [String]?) {
@@ -336,6 +372,12 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
     }
 
     private func clear() {
+        #if os(iOS)
+        if #available(iOS 13.0, *) {
+            nowPlayingCenter.playbackState = .stopped
+        }
+        #endif
+
         nowPlayingCenter.nowPlayingInfo = nil
         currentMetadata.removeAll()
 
@@ -371,6 +413,63 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
         handlersCleared = true
     }
 
+    @objc private func handleAudioSessionInterruption(_ notification: Notification) {
+        guard let typeValue = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? NSNumber,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue.uintValue) else {
+            return
+        }
+
+        switch type {
+        case .began:
+            sendEvent(["type": "audioInterruptionBegan"])
+        case .ended:
+            let optionsValue = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? NSNumber
+            let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue?.uintValue ?? 0)
+            let shouldResume = options.contains(.shouldResume)
+            if shouldResume {
+                try? AVAudioSession.sharedInstance().setActive(true)
+            }
+            sendEvent(["type": "audioInterruptionEnded", "shouldResume": shouldResume])
+        @unknown default:
+            break
+        }
+    }
+
+    @objc private func handleAudioRouteChange(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let reasonValue = userInfo[AVAudioSessionRouteChangeReasonKey] as? NSNumber,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue.uintValue) else {
+            return
+        }
+
+        switch reason {
+        case .oldDeviceUnavailable:
+            guard let previousRoute = userInfo[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription,
+                  routeHasPrivateAudioOutput(previousRoute) else {
+                return
+            }
+            sendEvent(["type": "audioRouteOldDeviceUnavailable"])
+        case .newDeviceAvailable:
+            guard routeHasPrivateAudioOutput(AVAudioSession.sharedInstance().currentRoute) else {
+                return
+            }
+            sendEvent(["type": "audioRouteNewDeviceAvailable"])
+        default:
+            break
+        }
+    }
+
+    private func routeHasPrivateAudioOutput(_ route: AVAudioSessionRouteDescription) -> Bool {
+        route.outputs.contains { output in
+            switch output.portType {
+            case .headphones, .bluetoothA2DP, .bluetoothHFP, .bluetoothLE:
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
     private func ensureHandlersRegistered() {
         guard handlersCleared else { return }
         setupRemoteCommandCenter()
@@ -378,7 +477,9 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
     }
 
     private func sendEvent(_ event: [String: Any]) {
-        eventSink?(event)
+        DispatchQueue.main.async { [weak self] in
+            self?.eventSink?(event)
+        }
     }
 
     // MARK: - FlutterStreamHandler
