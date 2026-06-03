@@ -313,6 +313,8 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
     }
 
     private func setQueueInfo(arguments: [String: Any]?) {
+        ensureHandlersRegistered()
+
         guard let args = arguments,
               let currentIndex = args["currentIndex"] as? Int,
               let queueLength = args["queueLength"] as? Int else { return }

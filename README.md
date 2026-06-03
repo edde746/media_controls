@@ -1,10 +1,10 @@
 # os_media_controls
 
-Flutter plugin for OS-level media controls on iOS, macOS, Android, Windows, and Linux. Displays rich media info in system UI and handles control events from lock screens, control centers, media keys, and MPRIS clients.
+Flutter plugin for OS-level media controls on iOS, tvOS, macOS, Android, Windows, and Linux. Displays rich media info in system UI and handles control events from lock screens, control centers, media keys, and MPRIS clients.
 
 ## Features
 
-- Cross-platform: iOS, macOS, Android, Windows, Linux
+- Cross-platform: iOS, tvOS, macOS, Android, Windows, Linux
 - Metadata: Title, artist, album, artwork, duration
 - Controls: Play/pause/next/prev/seek/speed
 - Integration: Lock screen, Control Center, MediaSession, SMTC, MPRIS, media keys
@@ -15,6 +15,7 @@ Flutter plugin for OS-level media controls on iOS, macOS, Android, Windows, and 
 | Platform | Min Version | Notes |
 |----------|-------------|-------|
 | iOS     | 12.0+      | CarPlay, Siri, AirPlay |
+| tvOS    | 13.0+      | Siri Remote, HDMI-CEC media keys |
 | macOS   | 10.14+     | Control Center |
 | Android | API 21+    | MediaSession, Auto/Wear |
 | Windows | 10+        | SMTC (partial) |
@@ -26,14 +27,14 @@ In `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  os_media_controls: ^0.2.1
+  os_media_controls: ^0.2.4
 ```
 
 Run: `flutter pub get`
 
 ## Platform Setup
 
-### iOS
+### iOS/tvOS
 
 Add to `Info.plist`:
 
@@ -55,6 +56,8 @@ do {
 } catch { print("Error: \(error)") }
 application.beginReceivingRemoteControlEvents()
 ```
+
+tvOS projects that use a custom Flutter tvOS engine may need to register the iOS plugin implementation manually because Flutter's stock tooling does not generate a tvOS plugin registrant.
 
 ### macOS
 

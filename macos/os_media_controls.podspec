@@ -4,12 +4,12 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'os_media_controls'
-  s.version          = '0.2.1'
+  s.version          = '0.2.4'
   s.summary          = 'OS-level media controls for Flutter'
   s.description      = <<-DESC
-A Flutter plugin for integrating with OS-level media controls across iOS, macOS, Android, and Windows.
+A Flutter plugin for integrating with OS-level media controls across iOS, tvOS, macOS, Android, and Windows.
                        DESC
-  s.homepage         = 'https://github.com/edde746/os-media-controls'
+  s.homepage         = 'https://github.com/edde746/media_controls'
   s.license          = { :file => '../LICENSE' }
   s.author           = { 'edde746' => 'https://github.com/edde746' }
   s.source           = { :path => '.' }

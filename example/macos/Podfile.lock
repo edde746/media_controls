@@ -1,6 +1,6 @@
 PODS:
   - FlutterMacOS (1.0.0)
-  - os_media_controls (0.2.1):
+  - os_media_controls (0.2.4):
     - FlutterMacOS
 
 DEPENDENCIES:
@@ -15,7 +15,7 @@ EXTERNAL SOURCES:
 
 SPEC CHECKSUMS:
   FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
-  os_media_controls: 116bf9c1acadf13faf49b470b06a5033a19b67f0
+  os_media_controls: 20a765c7ebaae4fb3133cc47782eb99d7b50d851
 
 PODFILE CHECKSUM: 54d867c82ac51cbd61b565781b9fada492027009
 

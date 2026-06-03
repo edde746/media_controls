@@ -3,13 +3,19 @@ import UIKit
 import MediaPlayer
 import AVFoundation
 
-public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
+public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandler, UIGestureRecognizerDelegate {
     private var eventSink: FlutterEventSink?
     private let nowPlayingCenter = MPNowPlayingInfoCenter.default()
     private let commandCenter = MPRemoteCommandCenter.shared()
 
     private var currentMetadata: [String: Any] = [:]
     private var handlersCleared = false
+
+    #if os(tvOS)
+    private weak var tvPlayPauseGestureRecognizer: UITapGestureRecognizer?
+    private var lastTvPlayPauseEventTime: TimeInterval = 0
+    private let tvPlayPauseDuplicateWindow: TimeInterval = 0.2
+    #endif
 
 
     public static func register(with registrar: FlutterPluginRegistrar) {
@@ -25,6 +31,13 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
         let instance = OsMediaControlsPlugin()
         registrar.addMethodCallDelegate(instance, channel: methodChannel)
         eventChannel.setStreamHandler(instance)
+
+        #if os(tvOS)
+        let viewController = registrar.viewController
+        DispatchQueue.main.async { [weak instance, weak viewController] in
+            instance?.setupTvPlayPauseGestureRecognizer(on: viewController?.view)
+        }
+        #endif
     }
 
     public override init() {
@@ -41,6 +54,11 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+        #if os(tvOS)
+        if let recognizer = tvPlayPauseGestureRecognizer {
+            recognizer.view?.removeGestureRecognizer(recognizer)
+        }
+        #endif
     }
 
     private func setupAudioSessionObservers() {
@@ -63,21 +81,21 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
         // Play command
         commandCenter.playCommand.isEnabled = true
         commandCenter.playCommand.addTarget { [weak self] event in
-            self?.sendEvent(["type": "play"])
+            self?.sendPlaybackCommand(defaultType: "play")
             return .success
         }
 
         // Pause command
         commandCenter.pauseCommand.isEnabled = true
         commandCenter.pauseCommand.addTarget { [weak self] event in
-            self?.sendEvent(["type": "pause"])
+            self?.sendPlaybackCommand(defaultType: "pause")
             return .success
         }
 
         // Toggle play/pause command
         commandCenter.togglePlayPauseCommand.isEnabled = true
         commandCenter.togglePlayPauseCommand.addTarget { [weak self] event in
-            self?.sendEvent(["type": "togglePlayPause"])
+            self?.sendPlaybackCommand(defaultType: "togglePlayPause")
             return .success
         }
 
@@ -267,20 +285,7 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
 
         nowPlayingCenter.nowPlayingInfo = nowPlayingInfo
 
-        #if os(iOS)
-        if #available(iOS 13.0, *) {
-            switch stateString {
-            case "playing":
-                nowPlayingCenter.playbackState = .playing
-            case "paused":
-                nowPlayingCenter.playbackState = .paused
-            case "stopped":
-                nowPlayingCenter.playbackState = .stopped
-            default:
-                nowPlayingCenter.playbackState = .unknown
-            }
-        }
-        #endif
+        setNativePlaybackState(stateString)
     }
 
     private func enableControls(arguments: [String]?) {
@@ -359,6 +364,8 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
     }
 
     private func setQueueInfo(arguments: [String: Any]?) {
+        ensureHandlersRegistered()
+
         guard let args = arguments,
               let currentIndex = args["currentIndex"] as? Int,
               let queueLength = args["queueLength"] as? Int else { return }
@@ -372,11 +379,7 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
     }
 
     private func clear() {
-        #if os(iOS)
-        if #available(iOS 13.0, *) {
-            nowPlayingCenter.playbackState = .stopped
-        }
-        #endif
+        setNativePlaybackState("stopped")
 
         nowPlayingCenter.nowPlayingInfo = nil
         currentMetadata.removeAll()
@@ -474,6 +477,74 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
         guard handlersCleared else { return }
         setupRemoteCommandCenter()
         handlersCleared = false
+    }
+
+    private func sendPlaybackCommand(defaultType: String) {
+        let eventType = playbackCommandEventType(defaultType)
+        #if os(tvOS)
+        if eventType == "togglePlayPause" && shouldSuppressDuplicateTvPlayPauseEvent() {
+            return
+        }
+        #endif
+        sendEvent(["type": eventType])
+    }
+
+    private func playbackCommandEventType(_ defaultType: String) -> String {
+        #if os(tvOS)
+        // The Siri Remote has one Play/Pause button, but tvOS may surface it
+        // through playCommand or pauseCommand depending on system state. Emit a
+        // toggle so the app can decide from its authoritative player state.
+        return "togglePlayPause"
+        #endif
+        return defaultType
+    }
+
+    #if os(tvOS)
+    private func setupTvPlayPauseGestureRecognizer(on view: UIView?) {
+        guard tvPlayPauseGestureRecognizer == nil, let view = view else { return }
+
+        let recognizer = UITapGestureRecognizer(target: self, action: #selector(handleTvPlayPauseGesture(_:)))
+        recognizer.allowedPressTypes = [NSNumber(value: UIPress.PressType.playPause.rawValue)]
+        recognizer.delegate = self
+        view.addGestureRecognizer(recognizer)
+        tvPlayPauseGestureRecognizer = recognizer
+    }
+
+    @objc private func handleTvPlayPauseGesture(_ recognizer: UITapGestureRecognizer) {
+        guard recognizer.state == .recognized else { return }
+        sendPlaybackCommand(defaultType: "togglePlayPause")
+    }
+
+    private func shouldSuppressDuplicateTvPlayPauseEvent() -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastTvPlayPauseEventTime < tvPlayPauseDuplicateWindow {
+            return true
+        }
+        lastTvPlayPauseEventTime = now
+        return false
+    }
+
+    public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                                  shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        true
+    }
+    #endif
+
+    private func setNativePlaybackState(_ stateString: String) {
+        #if os(iOS) || os(tvOS)
+        if #available(iOS 13.0, tvOS 13.0, *) {
+            switch stateString {
+            case "playing":
+                nowPlayingCenter.playbackState = .playing
+            case "paused":
+                nowPlayingCenter.playbackState = .paused
+            case "stopped":
+                nowPlayingCenter.playbackState = .stopped
+            default:
+                nowPlayingCenter.playbackState = .unknown
+            }
+        }
+        #endif
     }
 
     private func sendEvent(_ event: [String: Any]) {
