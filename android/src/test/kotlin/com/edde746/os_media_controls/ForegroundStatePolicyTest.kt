@@ -135,6 +135,40 @@ class ForegroundStatePolicyTest {
         }
     }
 
+    /**
+     * Task-removal teardown: `onTaskRemoved` flips backgroundModeEnabled to
+     * false *before* stopping the service, because playback-state updates
+     * from the Dart side keep arriving until the engine detaches. Without
+     * the flip, a throttled "playing" update would see serviceStarted=false
+     * and restart the service - and a revived instance can be denied
+     * startForeground (background FGS-start restrictions), stranding
+     * whatever it posts past the hard process kill (which skips onDestroy).
+     */
+    @Nested
+    inner class TaskRemovalTeardown {
+        @Test
+        fun `after task removal racing playback updates never restart the service`() {
+            for (playback in Playback.values()) {
+                assertEquals(
+                    Decision.NONE,
+                    decide(enabled = false, playback = playback, started = false),
+                    "post-task-removal + $playback",
+                )
+            }
+        }
+
+        @Test
+        fun `an instance revived by a stale start intent is stopped and cancelled`() {
+            for (playback in Playback.values()) {
+                assertEquals(
+                    Decision.STOP_SERVICE_AND_CANCEL,
+                    decide(enabled = false, playback = playback, started = true),
+                    "post-task-removal revived + $playback",
+                )
+            }
+        }
+    }
+
     @Nested
     inner class PlaybackMapping {
         @Test

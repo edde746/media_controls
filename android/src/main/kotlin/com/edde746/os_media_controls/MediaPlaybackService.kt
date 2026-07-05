@@ -47,6 +47,14 @@ class MediaPlaybackService : Service() {
     private var controller: MediaControllerCompat? = null
     private var stopped = false
 
+    /**
+     * Whether this instance ever managed to show its notification (via
+     * startForeground or notify). Gates the promote fallback in
+     * [promoteToForeground]: an instance that has never shown anything must
+     * not notify() its way into an orphan.
+     */
+    private var hasShownNotification = false
+
     private val controllerCallback = object : MediaControllerCompat.Callback() {
         override fun onPlaybackStateChanged(state: PlaybackStateCompat?) = refreshNotification()
 
@@ -101,7 +109,14 @@ class MediaPlaybackService : Service() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         // The user swiped the app away: never leave an orphaned notification
-        // or a headless playback service behind.
+        // or a headless playback service behind. Drop the opt-in *before*
+        // stopping so throttled "playing" updates racing the engine teardown
+        // cannot restart the service — a revived instance may be denied
+        // startForeground (background FGS-start restrictions) and anything it
+        // posts would outlive the imminent hard process kill (which skips
+        // onDestroy) as an uncancellable orphan. The Dart side re-asserts the
+        // opt-in on the next track open, so a surviving session self-heals.
+        MediaSessionHolder.backgroundModeEnabled = false
         stopAndCancel()
         super.onTaskRemoved(rootIntent)
     }
@@ -109,6 +124,10 @@ class MediaPlaybackService : Service() {
     override fun onDestroy() {
         controller?.unregisterCallback(controllerCallback)
         controller = null
+        // Belt and braces: no graceful destroy path may leave the
+        // notification behind — a dead service cannot keep it updated, and a
+        // demote-detached notification is not removed by service teardown.
+        notificationManager.cancel(NOTIFICATION_ID)
         if (MediaSessionHolder.service === this) {
             MediaSessionHolder.service = null
         }
@@ -133,11 +152,22 @@ class MediaPlaybackService : Service() {
             } else {
                 startForeground(NOTIFICATION_ID, notification)
             }
+            hasShownNotification = true
         } catch (e: Exception) {
-            // ForegroundServiceStartNotAllowedException and friends: keep the
-            // notification visible/updatable; playback continues for as long
-            // as the process lives, and the next playing state retries.
-            notificationManager.notify(NOTIFICATION_ID, notification)
+            // ForegroundServiceStartNotAllowedException and friends.
+            if (hasShownNotification) {
+                // A previously shown (now demoted) notification stays
+                // visible and updatable; the next allowed playing state
+                // re-promotes.
+                notificationManager.notify(NOTIFICATION_ID, notification)
+            } else {
+                // This instance has never shown anything and cannot enter
+                // the foreground (e.g. revived while the app is background).
+                // A notify()-posted notification here is not tied to the
+                // service and would survive a hard process kill as an orphan
+                // nothing can update or cancel — shut down instead.
+                stopAndCancel()
+            }
         }
     }
 
@@ -162,6 +192,10 @@ class MediaPlaybackService : Service() {
     fun stopAndCancel() {
         if (stopped) return
         stopped = true
+        // Unregister before touching the notification so no queued controller
+        // callback can re-post after the cancel below (onDestroy repeats the
+        // unregister harmlessly).
+        controller?.unregisterCallback(controllerCallback)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } else {
@@ -195,6 +229,7 @@ class MediaPlaybackService : Service() {
     private fun refreshNotification() {
         if (stopped) return
         notificationManager.notify(NOTIFICATION_ID, buildNotification())
+        hasShownNotification = true
     }
 
     private fun buildNotification(): Notification {
