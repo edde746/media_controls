@@ -111,6 +111,20 @@ class MethodChannelOsMediaControls extends OsMediaControlsPlatform {
   }
 
   @override
+  Future<void> setBackgroundMode(bool enabled) async {
+    // Only the Android implementation backs media controls with a foreground
+    // service; the other platforms keep controls alive without one.
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await methodChannel.invokeMethod('setBackgroundMode', {
+        'enabled': enabled,
+      });
+    } on PlatformException catch (e) {
+      throw Exception('Failed to set background mode: ${e.message}');
+    }
+  }
+
+  @override
   Future<void> clear() async {
     try {
       await methodChannel.invokeMethod('clear');

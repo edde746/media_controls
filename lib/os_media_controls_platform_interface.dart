@@ -67,6 +67,13 @@ abstract class OsMediaControlsPlatform extends PlatformInterface {
     throw UnimplementedError('setQueueInfo() has not been implemented.');
   }
 
+  /// Enables or disables background playback support.
+  ///
+  /// Android only; a no-op elsewhere.
+  Future<void> setBackgroundMode(bool enabled) {
+    throw UnimplementedError('setBackgroundMode() has not been implemented.');
+  }
+
   /// Clears all media information from system controls.
   Future<void> clear() {
     throw UnimplementedError('clear() has not been implemented.');

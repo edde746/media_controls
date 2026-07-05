@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:os_media_controls/os_media_controls.dart';
@@ -98,5 +99,25 @@ void main() {
       'position': 0.5,
       'speed': 0.0,
     });
+  });
+
+  test('setBackgroundMode forwards on Android and no-ops elsewhere', () async {
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(methodChannel, (MethodCall call) async {
+          calls.add(call);
+          return null;
+        });
+
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    await OsMediaControls.setBackgroundMode(true);
+    expect(calls, hasLength(1));
+    expect(calls.single.method, 'setBackgroundMode');
+    expect(calls.single.arguments, {'enabled': true});
+
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    await OsMediaControls.setBackgroundMode(true);
+    expect(calls, hasLength(1), reason: 'non-Android platforms must no-op');
+    debugDefaultTargetPlatformOverride = null;
   });
 }

@@ -1,6 +1,6 @@
 name: os_media_controls
 description: "Flutter plugin for OS-level media controls, metadata, playback state, and media-key events across supported platforms."
-version: 0.2.4
+version: 0.3.0
 homepage: https://github.com/edde746/media_controls
 repository: https://github.com/edde746/media_controls
 issue_tracker: https://github.com/edde746/media_controls/issues

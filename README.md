@@ -65,14 +65,11 @@ No extra setup.
 
 ### Android
 
-Add to `AndroidManifest.xml`:
+No extra setup for foreground-only media controls.
 
-```xml
-<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
-```
+For background audio playback, call `OsMediaControls.setBackgroundMode(true)` when an audio session starts (and `false` when it ends). The plugin then runs its own `mediaPlayback` foreground service while playback is active and renders the media session as a MediaStyle notification. The plugin manifest already merges the required `FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_MEDIA_PLAYBACK` permissions and the service declaration into your app.
 
-Use a foreground media service/notification for reliable background playback and Android system media surfaces.
+On Android 13+ the notification is only shown if your app holds the `POST_NOTIFICATIONS` runtime permission (playback and the service work without it). Optionally ship a drawable named `os_media_controls_notification_icon` to customize the status-bar icon; the launcher icon is used otherwise.
 
 ### Linux
 
@@ -137,12 +134,13 @@ Enable/disable: `await OsMediaControls.enableControls([MediaControl.play, MediaC
 - `enableControls(List<MediaControl>)` / `disableControls(List<MediaControl>)`
 - `setSkipIntervals({Duration? forward, backward})`
 - `setQueueInfo({int currentIndex, queueLength})`
+- `setBackgroundMode(bool)`: Android background playback (foreground service + notification); no-op elsewhere
 - `clear()`
 - `controlEvents`: Stream<MediaControlEvent> (PlayEvent, PauseEvent, SeekEvent, etc.)
 
 ### Models
 
-- `MediaMetadata`: title (req), artist, album, duration, artwork (Uint8List)
+- `MediaMetadata`: title (req), artist, album, duration, artwork (Uint8List), artworkUrl
 - `MediaPlaybackState`: state (PlaybackState: none/stopped/paused/playing/buffering), position (req), speed
 - `MediaControl`: play/pause/stop/next/prev/seek/skipForward/skipBackward/changeSpeed
 - Events: PlayEvent, SeekEvent (position), SkipForwardEvent (interval), etc.

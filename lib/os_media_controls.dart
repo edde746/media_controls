@@ -224,6 +224,32 @@ class OsMediaControls {
     );
   }
 
+  /// Enables or disables background playback support (Android only).
+  ///
+  /// While enabled, the Android implementation runs a `mediaPlayback`
+  /// foreground service whenever playback is active, which keeps audio
+  /// running when the app is backgrounded and renders the media session as
+  /// a MediaStyle notification (with previous / play-pause / next actions
+  /// for the controls that are enabled):
+  ///
+  /// - playing: service runs in the foreground (ongoing notification)
+  /// - paused: service stays alive but leaves the foreground; the
+  ///   notification remains, updatable and dismissible
+  /// - stopped / [clear] / disabled: service stops and the notification is
+  ///   removed
+  ///
+  /// Call with `true` when an audio session starts and `false` when it
+  /// ends. Sessions that never enable it (e.g. video playback, which the OS
+  /// keeps alive on its own) behave exactly as before. No-op on all other
+  /// platforms.
+  ///
+  /// Note: on Android 13+ the notification is only visible if the app holds
+  /// the `POST_NOTIFICATIONS` runtime permission; the service and playback
+  /// work regardless.
+  static Future<void> setBackgroundMode(bool enabled) async {
+    await OsMediaControlsPlatform.instance.setBackgroundMode(enabled);
+  }
+
   /// Clears all media information from system controls.
   ///
   /// Call this when stopping playback completely or when your app is

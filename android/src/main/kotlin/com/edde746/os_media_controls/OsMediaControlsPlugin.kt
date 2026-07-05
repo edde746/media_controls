@@ -8,6 +8,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.AudioManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -15,10 +17,18 @@ import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 /** OsMediaControlsPlugin */
 class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
     EventChannel.StreamHandler {
+
+    companion object {
+        private const val MAX_ARTWORK_DIMENSION = 512
+    }
 
     private lateinit var context: Context
     private lateinit var methodChannel: MethodChannel
@@ -46,6 +56,15 @@ class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
     private var noisyAudioReceiver: BroadcastReceiver? = null
     private var isNoisyReceiverRegistered = false
 
+    // Artwork URL download machinery: a single background thread with a
+    // 1-entry decoded-bitmap cache (repeat metadata updates for the same
+    // item are free).
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var artworkExecutor: ExecutorService? = null
+    private var latestArtworkUrl: String? = null
+    private var cachedArtworkUrl: String? = null
+    private var cachedArtworkBitmap: Bitmap? = null
+
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         context = binding.applicationContext
 
@@ -62,6 +81,7 @@ class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
         eventChannel.setStreamHandler(this)
 
         setupMediaSession()
+        MediaSessionHolder.setMediaSession(mediaSession.sessionToken)
     }
 
     private fun setupMediaSession() {
@@ -199,6 +219,10 @@ class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
                 // Could be added to metadata as custom fields if needed
                 result.success(null)
             }
+            "setBackgroundMode" -> {
+                setBackgroundMode(call.arguments as? Map<String, Any>)
+                result.success(null)
+            }
             "clear" -> {
                 clear()
                 result.success(null)
@@ -232,6 +256,7 @@ class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
                 (durationSeconds * 1000).toLong() // Convert to milliseconds
             )
         }
+        var artworkApplied = false
         arguments["artwork"]?.let {
             try {
                 val bytes = it as ByteArray
@@ -245,13 +270,85 @@ class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
                     }
                     builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, scaledBitmap)
                     builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, scaledBitmap)
+                    artworkApplied = true
                 }
             } catch (e: Exception) {
                 // Ignore artwork errors
             }
         }
 
+        // Fall back to the artwork URL: raw bytes take precedence, matching
+        // the iOS/macOS implementations.
+        val artworkUrl = if (artworkApplied) null else arguments["artworkUrl"] as? String
+        latestArtworkUrl = artworkUrl
+        if (artworkUrl != null) {
+            val cached = cachedArtworkBitmap
+            if (artworkUrl == cachedArtworkUrl && cached != null) {
+                builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, cached)
+                builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, cached)
+            } else {
+                fetchArtwork(artworkUrl)
+            }
+        }
+
         mediaSession.setMetadata(builder.build())
+    }
+
+    /**
+     * Downloads and downsamples artwork off the main thread, then merges it
+     * into the session metadata — unless a newer setMetadata call changed
+     * the wanted artwork in the meantime.
+     */
+    private fun fetchArtwork(url: String) {
+        val executor = artworkExecutor ?: Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "OsMediaControlsArtwork").apply { isDaemon = true }
+        }.also { artworkExecutor = it }
+
+        executor.execute {
+            val bitmap = downloadArtwork(url) ?: return@execute
+            mainHandler.post {
+                if (!::mediaSession.isInitialized || latestArtworkUrl != url) return@post
+                cachedArtworkUrl = url
+                cachedArtworkBitmap = bitmap
+                val current = mediaSession.controller.metadata ?: MediaMetadataCompat.Builder().build()
+                val updated = MediaMetadataCompat.Builder(current)
+                    .putBitmap(MediaMetadataCompat.METADATA_KEY_ART, bitmap)
+                    .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bitmap)
+                    .build()
+                mediaSession.setMetadata(updated)
+            }
+        }
+    }
+
+    private fun downloadArtwork(url: String): Bitmap? {
+        return try {
+            val connection = URL(url).openConnection() as HttpURLConnection
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 15_000
+            connection.instanceFollowRedirects = true
+            try {
+                val bytes = connection.inputStream.use { it.readBytes() }
+                decodeDownsampled(bytes, MAX_ARTWORK_DIMENSION)
+            } finally {
+                connection.disconnect()
+            }
+        } catch (e: Exception) {
+            null // Artwork is best-effort; the notification/session works without it.
+        }
+    }
+
+    private fun decodeDownsampled(bytes: ByteArray, maxDimension: Int): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sampleSize = 1
+        while (bounds.outWidth / (sampleSize * 2) >= maxDimension &&
+            bounds.outHeight / (sampleSize * 2) >= maxDimension
+        ) {
+            sampleSize *= 2
+        }
+        val options = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
     }
 
     private fun setPlaybackState(arguments: Map<String, Any>?) {
@@ -285,6 +382,50 @@ class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
         currentSpeed = speed
 
         updatePlaybackState()
+        applyForegroundPolicy()
+    }
+
+    /**
+     * Opt in/out of Android background playback. While enabled, playback
+     * state drives [MediaPlaybackService] via [ForegroundStatePolicy] so
+     * audio keeps running when the app is backgrounded and the session gets
+     * a MediaStyle notification. Sessions that never enable it (e.g. video)
+     * behave exactly as before.
+     */
+    private fun setBackgroundMode(arguments: Map<String, Any>?) {
+        val enabled = arguments?.get("enabled") as? Boolean ?: false
+        MediaSessionHolder.backgroundModeEnabled = enabled
+        applyForegroundPolicy()
+    }
+
+    private fun applyForegroundPolicy() {
+        val decision = ForegroundStatePolicy.decide(
+            backgroundModeEnabled = MediaSessionHolder.backgroundModeEnabled,
+            playback = ForegroundStatePolicy.playbackOf(currentState),
+            serviceStarted = MediaSessionHolder.service != null,
+        )
+        when (decision) {
+            ForegroundStatePolicy.Decision.START_FOREGROUND_SERVICE -> {
+                val intent = Intent(context, MediaPlaybackService::class.java)
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(intent)
+                    } else {
+                        context.startService(intent)
+                    }
+                } catch (e: Exception) {
+                    // Background-start restrictions: playback continues
+                    // in-process; the next playing state update retries.
+                }
+            }
+            ForegroundStatePolicy.Decision.PROMOTE_TO_FOREGROUND ->
+                MediaSessionHolder.service?.promoteToForeground()
+            ForegroundStatePolicy.Decision.DEMOTE_KEEP_NOTIFICATION ->
+                MediaSessionHolder.service?.demoteKeepNotification()
+            ForegroundStatePolicy.Decision.STOP_SERVICE_AND_CANCEL ->
+                MediaSessionHolder.service?.stopAndCancel()
+            ForegroundStatePolicy.Decision.NONE -> {}
+        }
     }
 
     private fun updateEnabledControls(arguments: Any?, enabled: Boolean) {
@@ -353,6 +494,7 @@ class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
     private fun clear() {
         unregisterNoisyAudioReceiver()
         currentState = PlaybackStateCompat.STATE_NONE
+        latestArtworkUrl = null
         mediaSession.setMetadata(null)
         val playbackState = PlaybackStateCompat.Builder()
             .setState(PlaybackStateCompat.STATE_NONE, 0, 0.0f)
@@ -360,6 +502,7 @@ class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
             .build()
         mediaSession.setPlaybackState(playbackState)
         mediaSession.isActive = false
+        applyForegroundPolicy()
     }
 
     private fun sendSessionEvent(event: Map<String, Any>) {
@@ -382,6 +525,14 @@ class OsMediaControlsPlugin: FlutterPlugin, MethodChannel.MethodCallHandler,
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        // Never leak a silent notification or a headless service past the
+        // engine's lifetime.
+        MediaSessionHolder.backgroundModeEnabled = false
+        MediaSessionHolder.service?.stopAndCancel()
+        MediaSessionHolder.setMediaSession(null)
+        artworkExecutor?.shutdownNow()
+        artworkExecutor = null
+        latestArtworkUrl = null
         unregisterNoisyAudioReceiver()
         methodChannel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
