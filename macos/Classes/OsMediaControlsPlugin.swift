@@ -10,6 +10,11 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
     private var currentMetadata: [String: Any] = [:]
     private var handlersCleared = false
 
+    // The artwork URL of the most recent setMetadata call. Downloads are
+    // async; a slow response for track A must not overwrite track B's
+    // now-playing info (last-writer-wins race on fast track changes).
+    private var latestArtworkUrl: String?
+
     public static func register(with registrar: FlutterPluginRegistrar) {
         let methodChannel = FlutterMethodChannel(
             name: "com.edde746.os_media_controls/methods",
@@ -186,10 +191,15 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
         }
         // Handle artwork from bytes (takes precedence over URL)
         if let artworkData = args["artwork"] as? FlutterStandardTypedData {
+            latestArtworkUrl = nil
             if let image = NSImage(data: artworkData.data) {
                 nowPlayingInfo[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
             }
         } else if let artworkUrlString = args["artworkUrl"] as? String, let artworkUrl = URL(string: artworkUrlString) {
+            // Clear the previous track's artwork right away (the download may
+            // be slow or fail); it is re-set below if this track's fetch wins.
+            nowPlayingInfo.removeValue(forKey: MPMediaItemPropertyArtwork)
+            latestArtworkUrl = artworkUrlString
             // Handle artwork from URL - download asynchronously
             URLSession.shared.dataTask(with: artworkUrl) { [weak self] data, response, error in
                 guard let self = self else { return }
@@ -198,11 +208,18 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
                 }
 
                 DispatchQueue.main.async {
+                    // Drop the result if another track's metadata replaced
+                    // this request while the download was in flight.
+                    guard self.latestArtworkUrl == artworkUrlString else { return }
                     var updatedInfo = self.nowPlayingCenter.nowPlayingInfo ?? [:]
                     updatedInfo[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
                     self.nowPlayingCenter.nowPlayingInfo = updatedInfo
                 }
             }.resume()
+        } else {
+            // No artwork for this track — don't keep the previous track's.
+            latestArtworkUrl = nil
+            nowPlayingInfo.removeValue(forKey: MPMediaItemPropertyArtwork)
         }
 
         nowPlayingCenter.nowPlayingInfo = nowPlayingInfo
@@ -334,6 +351,7 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
         // Clear now playing info
         nowPlayingCenter.nowPlayingInfo = nil
         currentMetadata.removeAll()
+        latestArtworkUrl = nil
 
         // Remove all command targets to fully clean up Control Center
         commandCenter.playCommand.removeTarget(nil)
