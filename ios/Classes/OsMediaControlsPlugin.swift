@@ -212,13 +212,6 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
 
         guard let args = arguments else { return }
 
-        // Reactivate audio session to ensure media controls work after being cleared
-        do {
-            try AVAudioSession.sharedInstance().setActive(true)
-        } catch {
-            print("Failed to reactivate audio session: \(error)")
-        }
-
         // Store metadata for later use
         for (key, value) in args {
             if key != "artwork" {
@@ -287,11 +280,16 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
               let position = args["position"] as? Double,
               let speed = args["speed"] as? Double else { return }
 
-        // Reactivate audio session to ensure media controls work after being cleared
-        do {
-            try AVAudioSession.sharedInstance().setActive(true)
-        } catch {
-            print("Failed to reactivate audio session: \(error)")
+        // Only claim the audio session when actually playing. The session is
+        // non-mixing, so activating it interrupts other apps' audio; doing it
+        // on paused pushes made an interrupted-while-paused app fight the
+        // interrupter in a play/pause loop (plezy#1496).
+        if stateString == "playing" {
+            do {
+                try AVAudioSession.sharedInstance().setActive(true)
+            } catch {
+                print("Failed to activate audio session: \(error)")
+            }
         }
 
         var nowPlayingInfo = nowPlayingCenter.nowPlayingInfo ?? [:]
