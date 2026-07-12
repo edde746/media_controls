@@ -13,6 +13,7 @@
 - The Android media session token is exposed to the new service through a
   process-local holder; the service stops itself (and removes its
   notification) on engine detach and on task removal.
+- iOS and macOS now support Swift Package Manager while retaining CocoaPods compatibility.
 
 ## 0.2.4
 

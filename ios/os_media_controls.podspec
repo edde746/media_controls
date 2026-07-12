@@ -13,7 +13,7 @@ A Flutter plugin for integrating with OS-level media controls across iOS, tvOS, 
   s.license          = { :file => '../LICENSE' }
   s.author           = { 'edde746' => 'https://github.com/edde746' }
   s.source           = { :path => '.' }
-  s.source_files = 'Classes/**/*'
+  s.source_files = 'os_media_controls/Sources/os_media_controls/**/*'
   s.dependency 'Flutter'
   s.ios.deployment_target  = '12.0'
   s.tvos.deployment_target = '13.0'
