@@ -584,8 +584,9 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
         // through playCommand or pauseCommand depending on system state. Emit a
         // toggle so the app can decide from its authoritative player state.
         return "togglePlayPause"
-        #endif
+        #else
         return defaultType
+        #endif
     }
 
     #if os(tvOS)
