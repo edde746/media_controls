@@ -3,10 +3,75 @@ import UIKit
 import MediaPlayer
 import AVFoundation
 
+final class AudioSessionActivationQueue {
+    typealias SynchronousActivation = (Bool, AVAudioSession.SetActiveOptions) throws -> Void
+
+    private let queue: DispatchQueue
+    private let synchronousActivation: SynchronousActivation
+    private let useSystemAsyncAPI: Bool
+
+    init(
+        label: String = "com.edde746.os_media_controls.audio-session",
+        useSystemAsyncAPI: Bool = true,
+        synchronousActivation: @escaping SynchronousActivation = { active, options in
+            try AVAudioSession.sharedInstance().setActive(active, options: options)
+        }
+    ) {
+        queue = DispatchQueue(label: label)
+        self.useSystemAsyncAPI = useSystemAsyncAPI
+        self.synchronousActivation = synchronousActivation
+    }
+
+    func setActive(
+        _ active: Bool,
+        options: AVAudioSession.SetActiveOptions = [],
+        onFailure: @escaping (Error?) -> Void
+    ) {
+        queue.async {
+            #if compiler(>=6.4)
+            if self.useSystemAsyncAPI {
+                if #available(iOS 27.0, tvOS 27.0, *) {
+                    let finished = DispatchSemaphore(value: 0)
+                    let session = AVAudioSession.sharedInstance()
+                    if active {
+                        session.activate(options: []) { activated, error in
+                            if !activated {
+                                onFailure(error)
+                            }
+                            finished.signal()
+                        }
+                    } else {
+                        var deactivationOptions: AVAudioSessionDeactivationOptions = []
+                        if options.contains(.notifyOthersOnDeactivation) {
+                            deactivationOptions.insert(.notifyOthersOnDeactivation)
+                        }
+                        session.deactivate(options: deactivationOptions) { deactivated, error in
+                            if !deactivated {
+                                onFailure(error)
+                            }
+                            finished.signal()
+                        }
+                    }
+                    finished.wait()
+                    return
+                }
+            }
+            #endif
+
+            do {
+                try self.synchronousActivation(active, options)
+            } catch {
+                onFailure(error)
+            }
+        }
+    }
+}
+
 public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandler, UIGestureRecognizerDelegate {
     private var eventSink: FlutterEventSink?
     private let nowPlayingCenter = MPNowPlayingInfoCenter.default()
     private let commandCenter = MPRemoteCommandCenter.shared()
+    private let audioSessionQueue = AudioSessionActivationQueue()
 
     private var currentMetadata: [String: Any] = [:]
     private var handlersCleared = false
@@ -285,11 +350,7 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
         // on paused pushes made an interrupted-while-paused app fight the
         // interrupter in a play/pause loop (plezy#1496).
         if stateString == "playing" {
-            do {
-                try AVAudioSession.sharedInstance().setActive(true)
-            } catch {
-                print("Failed to activate audio session: \(error)")
-            }
+            setAudioSessionActive(true)
         }
 
         var nowPlayingInfo = nowPlayingCenter.nowPlayingInfo ?? [:]
@@ -401,11 +462,7 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
         latestArtworkUrl = nil
 
         // Deactivate audio session to force iOS to remove controls from Control Center
-        do {
-            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        } catch {
-            // Audio session deactivation failed, but continue with cleanup
-        }
+        setAudioSessionActive(false, options: .notifyOthersOnDeactivation)
 
         // Disable all command center buttons
         let commandCenter = MPRemoteCommandCenter.shared()
@@ -446,7 +503,7 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
             let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue?.uintValue ?? 0)
             let shouldResume = options.contains(.shouldResume)
             if shouldResume {
-                try? AVAudioSession.sharedInstance().setActive(true)
+                setAudioSessionActive(true)
             }
             sendEvent(["type": "audioInterruptionEnded", "shouldResume": shouldResume])
         @unknown default:
@@ -485,6 +542,22 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
                 return true
             default:
                 return false
+            }
+        }
+    }
+
+    private func setAudioSessionActive(
+        _ active: Bool,
+        options: AVAudioSession.SetActiveOptions = []
+    ) {
+        // iOS/tvOS 27 use AVAudioSession's asynchronous API. Older systems
+        // keep the blocking fallback ordered without stalling Flutter's UI thread.
+        audioSessionQueue.setActive(active, options: options) { error in
+            let operation = active ? "activate" : "deactivate"
+            if let error = error {
+                print("Failed to \(operation) audio session: \(error)")
+            } else {
+                print("Failed to \(operation) audio session")
             }
         }
     }
