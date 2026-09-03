@@ -3,65 +3,38 @@ import UIKit
 import MediaPlayer
 import AVFoundation
 
+/// Serializes AVAudioSession activation off the main thread.
+///
+/// `setActive` is synchronous and can block on the audio server and route
+/// negotiation; Xcode's runtime checker reports it as a UI-hang risk when it
+/// runs on the main thread. A private serial queue keeps activate/deactivate
+/// transitions in submission order without stalling Flutter's UI thread.
 final class AudioSessionActivationQueue {
-    typealias SynchronousActivation = (Bool, AVAudioSession.SetActiveOptions) throws -> Void
+    typealias Activation = (Bool, AVAudioSession.SetActiveOptions) throws -> Void
 
-    private let queue: DispatchQueue
-    private let synchronousActivation: SynchronousActivation
-    private let useSystemAsyncAPI: Bool
+    private let queue = DispatchQueue(label: "com.edde746.os_media_controls.audio-session")
+    private let activation: Activation
 
     init(
-        label: String = "com.edde746.os_media_controls.audio-session",
-        useSystemAsyncAPI: Bool = true,
-        synchronousActivation: @escaping SynchronousActivation = { active, options in
+        activation: @escaping Activation = { active, options in
             try AVAudioSession.sharedInstance().setActive(active, options: options)
         }
     ) {
-        queue = DispatchQueue(label: label)
-        self.useSystemAsyncAPI = useSystemAsyncAPI
-        self.synchronousActivation = synchronousActivation
+        self.activation = activation
     }
 
+    /// `completion` runs on the private queue with `nil` on success.
     func setActive(
         _ active: Bool,
         options: AVAudioSession.SetActiveOptions = [],
-        onFailure: @escaping (Error?) -> Void
+        completion: @escaping (Error?) -> Void
     ) {
         queue.async {
-            #if compiler(>=6.4)
-            if self.useSystemAsyncAPI {
-                if #available(iOS 27.0, tvOS 27.0, *) {
-                    let finished = DispatchSemaphore(value: 0)
-                    let session = AVAudioSession.sharedInstance()
-                    if active {
-                        session.activate(options: []) { activated, error in
-                            if !activated {
-                                onFailure(error)
-                            }
-                            finished.signal()
-                        }
-                    } else {
-                        var deactivationOptions: AVAudioSessionDeactivationOptions = []
-                        if options.contains(.notifyOthersOnDeactivation) {
-                            deactivationOptions.insert(.notifyOthersOnDeactivation)
-                        }
-                        session.deactivate(options: deactivationOptions) { deactivated, error in
-                            if !deactivated {
-                                onFailure(error)
-                            }
-                            finished.signal()
-                        }
-                    }
-                    finished.wait()
-                    return
-                }
-            }
-            #endif
-
             do {
-                try self.synchronousActivation(active, options)
+                try self.activation(active, options)
+                completion(nil)
             } catch {
-                onFailure(error)
+                completion(error)
             }
         }
     }
@@ -502,10 +475,17 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
             let optionsValue = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? NSNumber
             let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue?.uintValue ?? 0)
             let shouldResume = options.contains(.shouldResume)
+            let event: [String: Any] = ["type": "audioInterruptionEnded", "shouldResume": shouldResume]
             if shouldResume {
-                setAudioSessionActive(true)
+                // Reclaim the session before the app resumes playback so the
+                // resume lands on an active session, as it did when this was
+                // synchronous.
+                setAudioSessionActive(true) { [weak self] in
+                    self?.sendEvent(event)
+                }
+            } else {
+                sendEvent(event)
             }
-            sendEvent(["type": "audioInterruptionEnded", "shouldResume": shouldResume])
         @unknown default:
             break
         }
@@ -546,19 +526,18 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
         }
     }
 
+    /// `completion` runs on the audio-session queue after the transition,
+    /// whether or not it succeeded; failures are logged and not retried.
     private func setAudioSessionActive(
         _ active: Bool,
-        options: AVAudioSession.SetActiveOptions = []
+        options: AVAudioSession.SetActiveOptions = [],
+        completion: (() -> Void)? = nil
     ) {
-        // iOS/tvOS 27 use AVAudioSession's asynchronous API. Older systems
-        // keep the blocking fallback ordered without stalling Flutter's UI thread.
         audioSessionQueue.setActive(active, options: options) { error in
-            let operation = active ? "activate" : "deactivate"
             if let error = error {
-                print("Failed to \(operation) audio session: \(error)")
-            } else {
-                print("Failed to \(operation) audio session")
+                print("Failed to \(active ? "activate" : "deactivate") audio session: \(error)")
             }
+            completion?()
         }
     }
 
