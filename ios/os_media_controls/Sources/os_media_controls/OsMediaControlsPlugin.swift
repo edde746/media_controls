@@ -3,10 +3,48 @@ import UIKit
 import MediaPlayer
 import AVFoundation
 
+/// Serializes AVAudioSession activation off the main thread.
+///
+/// `setActive` is synchronous and can block on the audio server and route
+/// negotiation; Xcode's runtime checker reports it as a UI-hang risk when it
+/// runs on the main thread. A private serial queue keeps activate/deactivate
+/// transitions in submission order without stalling Flutter's UI thread.
+final class AudioSessionActivationQueue {
+    typealias Activation = (Bool, AVAudioSession.SetActiveOptions) throws -> Void
+
+    private let queue = DispatchQueue(label: "com.edde746.os_media_controls.audio-session")
+    private let activation: Activation
+
+    init(
+        activation: @escaping Activation = { active, options in
+            try AVAudioSession.sharedInstance().setActive(active, options: options)
+        }
+    ) {
+        self.activation = activation
+    }
+
+    /// `completion` runs on the private queue with `nil` on success.
+    func setActive(
+        _ active: Bool,
+        options: AVAudioSession.SetActiveOptions = [],
+        completion: @escaping (Error?) -> Void
+    ) {
+        queue.async {
+            do {
+                try self.activation(active, options)
+                completion(nil)
+            } catch {
+                completion(error)
+            }
+        }
+    }
+}
+
 public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandler, UIGestureRecognizerDelegate {
     private var eventSink: FlutterEventSink?
     private let nowPlayingCenter = MPNowPlayingInfoCenter.default()
     private let commandCenter = MPRemoteCommandCenter.shared()
+    private let audioSessionQueue = AudioSessionActivationQueue()
 
     private var currentMetadata: [String: Any] = [:]
     private var handlersCleared = false
@@ -285,11 +323,7 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
         // on paused pushes made an interrupted-while-paused app fight the
         // interrupter in a play/pause loop (plezy#1496).
         if stateString == "playing" {
-            do {
-                try AVAudioSession.sharedInstance().setActive(true)
-            } catch {
-                print("Failed to activate audio session: \(error)")
-            }
+            setAudioSessionActive(true)
         }
 
         var nowPlayingInfo = nowPlayingCenter.nowPlayingInfo ?? [:]
@@ -401,11 +435,7 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
         latestArtworkUrl = nil
 
         // Deactivate audio session to force iOS to remove controls from Control Center
-        do {
-            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        } catch {
-            // Audio session deactivation failed, but continue with cleanup
-        }
+        setAudioSessionActive(false, options: .notifyOthersOnDeactivation)
 
         // Disable all command center buttons
         let commandCenter = MPRemoteCommandCenter.shared()
@@ -445,10 +475,17 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
             let optionsValue = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? NSNumber
             let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue?.uintValue ?? 0)
             let shouldResume = options.contains(.shouldResume)
+            let event: [String: Any] = ["type": "audioInterruptionEnded", "shouldResume": shouldResume]
             if shouldResume {
-                try? AVAudioSession.sharedInstance().setActive(true)
+                // Reclaim the session before the app resumes playback so the
+                // resume lands on an active session, as it did when this was
+                // synchronous.
+                setAudioSessionActive(true) { [weak self] in
+                    self?.sendEvent(event)
+                }
+            } else {
+                sendEvent(event)
             }
-            sendEvent(["type": "audioInterruptionEnded", "shouldResume": shouldResume])
         @unknown default:
             break
         }
@@ -489,6 +526,21 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
         }
     }
 
+    /// `completion` runs on the audio-session queue after the transition,
+    /// whether or not it succeeded; failures are logged and not retried.
+    private func setAudioSessionActive(
+        _ active: Bool,
+        options: AVAudioSession.SetActiveOptions = [],
+        completion: (() -> Void)? = nil
+    ) {
+        audioSessionQueue.setActive(active, options: options) { error in
+            if let error = error {
+                print("Failed to \(active ? "activate" : "deactivate") audio session: \(error)")
+            }
+            completion?()
+        }
+    }
+
     private func ensureHandlersRegistered() {
         guard handlersCleared else { return }
         setupRemoteCommandCenter()
@@ -511,8 +563,9 @@ public class OsMediaControlsPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
         // through playCommand or pauseCommand depending on system state. Emit a
         // toggle so the app can decide from its authoritative player state.
         return "togglePlayPause"
-        #endif
+        #else
         return defaultType
+        #endif
     }
 
     #if os(tvOS)
